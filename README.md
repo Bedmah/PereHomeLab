@@ -2,6 +2,11 @@
 
 Веб-мониторинг кнопок через Home Assistant.
 
+## Ссылки
+
+- Docker Hub: https://hub.docker.com/r/bedmah/perehomelab
+- GitHub: https://github.com/Bedmah/PereHomeLab
+
 ## Что делает
 
 - Подключается к Home Assistant по REST и WebSocket API.
