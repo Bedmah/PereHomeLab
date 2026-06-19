@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Переговорки</title>
+    <link rel="stylesheet" href="/static/styles.css?v=16" />
+  </head>
+  <body>
+    <main class="screen">
+      <header class="top-nav">
+        <div class="brand">
+          <div class="brand-mark">Y</div>
+          <div class="brand-text">YADRO</div>
+        </div>
+        <div class="nav-status">
+          <span id="connectionBadge" class="dot wait"></span>
+          <span id="statusText">Подключение</span>
+        </div>
+      </header>
+
+      <section class="hero">
+        <div class="hero-copy">
+          <div class="kicker">Meeting rooms monitor</div>
+          <h1>Переговорки</h1>
+        </div>
+        <div class="hero-metrics">
+          <div class="metric">
+            <span>Кнопок</span>
+            <strong id="watchedCount">0</strong>
+          </div>
+          <button id="enableSoundButton" class="sound-button">Звук</button>
+          <a class="download-button" href="/static/downloads/kiosk-browser.zip" download>Скачать приложение</a>
+        </div>
+      </section>
+
+      <section class="layout dashboard">
+        <section class="battery-panel">
+          <div class="panel-head compact">
+            <div>
+              <span class="section-label">Battery</span>
+              <h2>Заряд</h2>
+            </div>
+            <button id="toggleBatteriesButton" class="mini-button">Показать все</button>
+          </div>
+          <div id="batterySummary" class="battery-summary">Самые разряженные</div>
+          <label class="battery-search">
+            <span>Поиск</span>
+            <input id="batterySearchInput" type="search" placeholder="Название переговорки" autocomplete="off" />
+          </label>
+          <div id="batteryList" class="battery-list"></div>
+        </section>
+
+        <section class="history-panel">
+          <div class="panel-head compact">
+            <div>
+              <span class="section-label">Touch</span>
+              <h2>Нажатия</h2>
+              <div id="historySummary" class="history-summary">История загружается</div>
+            </div>
+            <div class="pager">
+              <button id="prevPageButton" class="ghost-button">←</button>
+              <div id="pageInfo" class="page-info">1 / 1</div>
+              <button id="nextPageButton" class="ghost-button">→</button>
+              <button id="refreshHistoryButton" class="ghost-button">↻</button>
+            </div>
+          </div>
+          <div id="historyList" class="history-list"></div>
+        </section>
+      </section>
+    </main>
+
+    <section id="popup" class="popup hidden">
+      <div class="popup-card">
+        <div class="popup-top">
+          <div>
+            <span class="section-label">Alert</span>
+            <h2 id="popupTitle">Нажатие</h2>
+          </div>
+          <span id="popupCount" class="popup-count">1</span>
+        </div>
+        <div id="popupList" class="popup-list"></div>
+        <button id="clearPopupButton" class="fa-button popup-fa">...</button>
+      </div>
+    </section>
+
+    <section id="detailsModal" class="details-modal hidden">
+      <div class="details-card">
+        <button id="detailsCloseButton" class="details-close">×</button>
+        <span class="section-label">Детали</span>
+        <h2 id="detailsName">Переговорка</h2>
+        <dl class="details-grid">
+          <div>
+            <dt>Нажата</dt>
+            <dd id="detailsPressedAt">—</dd>
+          </div>
+          <div>
+            <dt id="detailsAckLabel">...</dt>
+            <dd id="detailsAcknowledgedAt">—</dd>
+          </div>
+        </dl>
+      </div>
+    </section>
+
+    <audio id="alertAudio" preload="auto"></audio>
+    <script src="/static/app.js?v=17"></script>
+  </body>
+</html>

@@ -1,0 +1,12 @@
+.git
+.venv
+secret.env
+.secret.env.swp
+*.swp
+logs
+data
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.DS_Store
