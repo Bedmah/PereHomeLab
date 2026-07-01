@@ -31,6 +31,8 @@ class AppConfig:
     sound_play_seconds: float
     history_db_path: Path
     history_dedup_seconds: float
+    admin_username: str
+    admin_password: str
 
 
 def _required(name: str) -> str:
@@ -125,4 +127,6 @@ def load_config() -> AppConfig:
         sound_play_seconds=sound_play_seconds,
         history_db_path=_path('HISTORY_DB_PATH', 'data/press_history.db'),
         history_dedup_seconds=history_dedup_seconds,
+        admin_username=os.getenv('ADMIN_USERNAME', 'admin').strip(),
+        admin_password=os.getenv('ADMIN_PASSWORD', 'admin').strip(),
     )

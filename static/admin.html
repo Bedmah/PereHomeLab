@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Переговорки · Админка</title>
+    <link rel="stylesheet" href="/static/styles.css?v=70" />
+  </head>
+  <body>
+    <main class="screen">
+      <header class="top-nav">
+        <div class="brand">
+          <div class="brand-mark">Y</div>
+          <div class="brand-text">YADRO</div>
+        </div>
+        <div class="hero-metrics">
+          <a class="download-button" href="/">Главная</a>
+        </div>
+      </header>
+
+      <section class="hero admin-hero">
+        <div class="hero-copy">
+          <div class="kicker">Admin</div>
+          <h1>Админка</h1>
+        </div>
+      </section>
+
+      <nav class="admin-tabs" aria-label="Разделы админки">
+        <button class="admin-tab active" type="button" data-tab="areas">Регионы</button>
+        <button class="admin-tab" type="button" data-tab="sounds">Звуки</button>
+        <button class="admin-tab" type="button" data-tab="logs">Логи</button>
+        <button class="admin-tab" type="button" data-tab="profile">Мой пароль</button>
+        <button class="admin-tab owner-only" type="button" data-tab="users">Пользователи</button>
+      </nav>
+
+      <section class="admin-panel admin-tab-panel" data-panel="sounds">
+        <div class="panel-head compact">
+          <div>
+            <span class="section-label">Sound</span>
+            <h2>Библиотека звуков</h2>
+          </div>
+        </div>
+        <div class="admin-note">Загрузи mp3/wav/ogg файл, потом выбери его в нужном регионе.</div>
+        <div class="sound-upload">
+          <input id="soundFileInput" type="file" accept=".mp3,.wav,.ogg,audio/*" />
+          <button id="soundUploadButton" class="mini-button">Загрузить</button>
+        </div>
+        <div class="sound-tools">
+          <input id="soundSearchInput" type="search" placeholder="Поиск по названию звука" />
+          <div class="sound-pager">
+            <button id="soundPrevButton" class="mini-button" type="button">←</button>
+            <span id="soundPageInfo" class="sound-page-info">1 / 1</span>
+            <button id="soundNextButton" class="mini-button" type="button">→</button>
+          </div>
+        </div>
+        <div id="soundLibraryList" class="sound-library-list"></div>
+      </section>
+
+      <section class="admin-panel admin-tab-panel active" data-panel="areas">
+        <div class="panel-head compact">
+          <div>
+            <span class="section-label">Home Assistant</span>
+            <h2>Пространства</h2>
+          </div>
+          <button id="adminRefreshButton" class="mini-button">Обновить</button>
+        </div>
+        <div class="admin-note">Настрой отображаемое имя региона для пространства HA. Кнопки подтягиваются автоматически из выбранного пространства.</div>
+        <div id="adminAreaList" class="admin-area-list"></div>
+      </section>
+
+      <section class="admin-panel admin-tab-panel" data-panel="logs">
+        <div class="panel-head compact">
+          <div>
+            <span class="section-label">Logs</span>
+            <h2>Ошибки сервиса</h2>
+          </div>
+          <button id="adminLogsRefreshButton" class="mini-button">Обновить</button>
+        </div>
+        <div class="admin-note">Последние ошибки Home Assistant и backend из файлов логов.</div>
+        <div id="adminLogList" class="admin-log-list"></div>
+      </section>
+
+      <section class="admin-panel admin-tab-panel" data-panel="profile">
+        <div class="panel-head compact">
+          <div>
+            <span class="section-label">Profile</span>
+            <h2>Мой пароль</h2>
+          </div>
+        </div>
+        <div id="profilePasswordNote" class="admin-note">Смена пароля текущего пользователя.</div>
+        <div class="admin-user-create profile-password-form">
+          <input id="ownAdminPassword" type="password" placeholder="Новый пароль" autocomplete="new-password" />
+          <button id="changeOwnPasswordButton" class="mini-button" type="button">Сменить пароль</button>
+        </div>
+        <div id="ownPasswordStatus" class="admin-save-status"></div>
+      </section>
+
+      <section class="admin-panel admin-tab-panel owner-only" data-panel="users">
+        <div class="panel-head compact">
+          <div>
+            <span class="section-label">Access</span>
+            <h2>Пользователи</h2>
+          </div>
+          <button id="adminUsersRefreshButton" class="mini-button">Обновить</button>
+        </div>
+        <div class="admin-note">Созданные пользователи получают полный доступ к админке, кроме управления учётками.</div>
+
+        <div class="admin-user-create">
+          <input id="newAdminUsername" type="text" placeholder="Логин" autocomplete="off" />
+          <input id="newAdminPassword" type="password" placeholder="Пароль" autocomplete="new-password" />
+          <button id="createAdminUserButton" class="mini-button" type="button">Создать</button>
+        </div>
+
+        <div id="adminUserList" class="admin-user-list"></div>
+
+        <div class="panel-head compact login-log-head">
+          <div>
+            <span class="section-label">Login</span>
+            <h2>Журнал входов</h2>
+          </div>
+          <button id="adminLoginLogsRefreshButton" class="mini-button">Обновить</button>
+        </div>
+        <div id="adminLoginLogList" class="admin-log-list"></div>
+      </section>
+    </main>
+    <script src="/static/admin.js?v=70"></script>
+  </body>
+</html>

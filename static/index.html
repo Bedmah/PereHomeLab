@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Переговорки</title>
-    <link rel="stylesheet" href="/static/styles.css?v=16" />
+    <link rel="stylesheet" href="/static/styles.css?v=70" />
   </head>
   <body>
     <main class="screen">
@@ -26,13 +26,15 @@
         </div>
         <div class="hero-metrics">
           <div class="metric">
-            <span>Кнопок</span>
+            <span>Доступно</span>
             <strong id="watchedCount">0</strong>
           </div>
           <button id="enableSoundButton" class="sound-button">Звук</button>
-          <a class="download-button" href="/static/downloads/kiosk-browser.zip" download>Скачать приложение</a>
+          <a class="download-button" href="/static/downloads/PereHomeLabKiosk.exe" download>Скачать</a>
+          <a class="download-button" href="/">Главная</a>
         </div>
       </section>
+
 
       <section class="layout dashboard">
         <section class="battery-panel">
@@ -62,7 +64,7 @@
               <button id="prevPageButton" class="ghost-button">←</button>
               <div id="pageInfo" class="page-info">1 / 1</div>
               <button id="nextPageButton" class="ghost-button">→</button>
-              <button id="refreshHistoryButton" class="ghost-button">↻</button>
+              <button id="refreshHistoryButton" class="ghost-button" title="Обновить историю и заряд">↻</button>
             </div>
           </div>
           <div id="historyList" class="history-list"></div>
@@ -102,7 +104,68 @@
       </div>
     </section>
 
+    <section id="batteryModal" class="details-modal hidden">
+      <div class="details-card battery-details-card">
+        <button id="batteryCloseButton" class="details-close">×</button>
+        <span class="section-label">Battery</span>
+        <h2 id="batteryDetailsName">Переговорка</h2>
+        <div class="battery-details-percent" id="batteryDetailsPercent">—</div>
+        <dl class="details-grid battery-details-grid">
+          <div>
+            <dt>Данные получены</dt>
+            <dd id="batteryDetailsUpdated">—</dd>
+          </div>
+          <div>
+            <dt>Значение HA обновилось</dt>
+            <dd id="batteryDetailsChanged">—</dd>
+          </div>
+          <div>
+            <dt>Статус</dt>
+            <dd id="batteryDetailsStatus">—</dd>
+          </div>
+          <div>
+            <dt>Регион</dt>
+            <dd id="batteryDetailsArea">—</dd>
+          </div>
+          <div>
+            <dt>Датчик заряда</dt>
+            <dd id="batteryDetailsEntity">—</dd>
+          </div>
+          <div>
+            <dt>Кнопка</dt>
+            <dd id="batteryDetailsButtonEntity">—</dd>
+          </div>
+          <div>
+            <dt>Сырое значение HA</dt>
+            <dd id="batteryDetailsRaw">—</dd>
+          </div>
+        </dl>
+      </div>
+    </section>
+
+    <section id="volumeWidget" class="volume-widget">
+      <button id="volumeToggleButton" class="volume-toggle" type="button" aria-expanded="false" title="Громкость уведомлений">
+        <span>🔊</span>
+        <strong id="volumeBadge">100%</strong>
+      </button>
+      <div id="volumePanel" class="volume-panel hidden">
+        <div class="volume-panel-head">
+          <span class="section-label">Sound</span>
+          <button id="volumeCloseButton" class="details-close small-close" type="button">×</button>
+        </div>
+        <h2>Громкость</h2>
+        <label class="volume-control" title="Громкость уведомлений">
+          <strong id="volumeValue">100%</strong>
+          <input id="volumeSlider" type="range" min="0" max="100" step="1" value="100" />
+        </label>
+        <label class="volume-number">
+          <input id="volumeInput" type="number" min="0" max="100" step="1" value="100" inputmode="numeric" />
+        </label>
+        <button id="volumeTestButton" class="volume-test-button" type="button">Проверить</button>
+      </div>
+    </section>
+
     <audio id="alertAudio" preload="auto"></audio>
-    <script src="/static/app.js?v=17"></script>
+    <script src="/static/app.js?v=70"></script>
   </body>
 </html>

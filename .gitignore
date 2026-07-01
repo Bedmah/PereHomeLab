@@ -5,3 +5,10 @@ data/
 __pycache__/
 *.pyc
 .venv
+*.log
+*.db
+*.sqlite
+*.sqlite3
+sound/*
+!sound/1.mp3
+!sound/.gitkeep

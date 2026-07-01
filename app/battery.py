@@ -37,7 +37,7 @@ def _battery_key(entity_id: str) -> str | None:
     return None
 
 
-def collect_batteries(states: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def collect_batteries(states: list[dict[str, Any]], entity_areas: dict[str, dict[str, str | None]] | None = None, area_id: str | None = None) -> list[dict[str, Any]]:
     button_names: dict[str, str] = {}
 
     for state in states:
@@ -49,6 +49,7 @@ def collect_batteries(states: list[dict[str, Any]]) -> list[dict[str, Any]]:
         friendly_name = str(attributes.get('friendly_name') or entity_id)
         button_names[key] = _clean_name(friendly_name)
 
+    entity_areas = entity_areas or {}
     batteries: list[dict[str, Any]] = []
 
     for state in states:
@@ -64,14 +65,23 @@ def collect_batteries(states: list[dict[str, Any]]) -> list[dict[str, Any]]:
         attributes = state.get('attributes') if isinstance(state.get('attributes'), dict) else {}
         friendly_name = str(attributes.get('friendly_name') or button_names[key])
 
+        button_entity_id = f'binary_sensor.{key}_safety'
+        area = entity_areas.get(button_entity_id) or {}
+        item_area_id = area.get('area_id')
+        if area_id and item_area_id != area_id:
+            continue
+
         batteries.append(
             {
                 'entity_id': entity_id,
-                'button_entity_id': f'binary_sensor.{key}_safety',
+                'button_entity_id': button_entity_id,
                 'name': _clean_name(friendly_name) or button_names[key],
+                'area_id': item_area_id,
+                'area_name': area.get('area_name'),
                 'percent': percent,
                 'state': str(state.get('state') or ''),
                 'unit': str(attributes.get('unit_of_measurement') or '%'),
+                'changed_at': str(state.get('last_changed') or ''),
                 'updated_at': str(state.get('last_updated') or ''),
             }
         )

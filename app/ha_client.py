@@ -59,6 +59,33 @@ class HomeAssistantClient:
             'message': response.text[:300],
         }
 
+
+    async def get_registry(self) -> dict[str, list[dict[str, Any]]]:
+        websocket = await self.connect_websocket()
+        try:
+            return {
+                'areas': await self._registry_ws_request(websocket, 'config/area_registry/list'),
+                'devices': await self._registry_ws_request(websocket, 'config/device_registry/list'),
+                'entities': await self._registry_ws_request(websocket, 'config/entity_registry/list'),
+            }
+        finally:
+            await websocket.close()
+
+    async def _registry_ws_request(self, websocket: WebSocketClientProtocol, request_type: str) -> list[dict[str, Any]]:
+        import json
+        request_id = next(self._counter)
+        await websocket.send(json.dumps({'id': request_id, 'type': request_type}))
+        while True:
+            payload = json.loads(await websocket.recv())
+            if payload.get('id') != request_id:
+                continue
+            if not payload.get('success'):
+                raise HomeAssistantError(f'HA registry command failed: {payload}')
+            result = payload.get('result')
+            if not isinstance(result, list):
+                raise HomeAssistantError(f'Unexpected HA registry response for {request_type}')
+            return result
+
     async def get_states(self) -> list[dict[str, Any]]:
         return await asyncio.to_thread(self._get_states_sync)
 

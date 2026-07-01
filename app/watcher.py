@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from fastapi import WebSocket
 
+from app.cities import CityStore
 from app.config import AppConfig
 from app.ha_client import HomeAssistantClient
 from app.history import HistoryStore
@@ -18,6 +19,14 @@ from app.history import HistoryStore
 class WatchedEntity:
     entity_id: str
     name: str
+    area_id: str | None = None
+    area_name: str | None = None
+    sound_path: str | None = None
+    sound_repeat_mode: str | None = None
+    sound_repeat_seconds: float | None = None
+    sound_repeat_count: int | None = None
+    ack_button_text: str | None = None
+    available: bool = True
 
 
 @dataclass(frozen=True)
@@ -27,6 +36,13 @@ class PressEvent:
     device_name: str
     pressed_at: str
     pressed_at_display: str
+    area_id: str | None = None
+    area_name: str | None = None
+    sound_path: str | None = None
+    sound_repeat_mode: str | None = None
+    sound_repeat_seconds: float | None = None
+    sound_repeat_count: int | None = None
+    ack_button_text: str | None = None
 
     def to_dict(self) -> dict[str, str]:
         return {
@@ -35,6 +51,13 @@ class PressEvent:
             'device_name': self.device_name,
             'pressed_at': self.pressed_at,
             'pressed_at_display': self.pressed_at_display,
+            'area_id': self.area_id,
+            'area_name': self.area_name,
+            'sound_path': self.sound_path,
+            'sound_repeat_mode': self.sound_repeat_mode,
+            'sound_repeat_seconds': self.sound_repeat_seconds,
+            'sound_repeat_count': self.sound_repeat_count,
+            'ack_button_text': self.ack_button_text,
         }
 
 
@@ -44,14 +67,17 @@ class HomeAssistantWatcher:
         config: AppConfig,
         client: HomeAssistantClient,
         history: HistoryStore,
+        cities: CityStore,
         logger: logging.Logger,
     ) -> None:
         self._config = config
         self._client = client
         self._history = history
+        self._cities = cities
         self._logger = logger
         self._clients: set[WebSocket] = set()
         self._entities: dict[str, WatchedEntity] = {}
+        self._areas: list[dict[str, str]] = []
         self._task: asyncio.Task | None = None
         self._running = False
         self.status_message = 'Ожидание запуска'
@@ -61,6 +87,64 @@ class HomeAssistantWatcher:
     @property
     def watched_count(self) -> int:
         return len(self._entities)
+
+    @property
+    def active_watched_count(self) -> int:
+        return sum(1 for entity in self._entities.values() if entity.available)
+
+    def area_counts(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for entity in self._entities.values():
+            if entity.area_id:
+                counts[entity.area_id] = counts.get(entity.area_id, 0) + 1
+        return counts
+
+    def active_area_counts(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for entity in self._entities.values():
+            if entity.area_id and entity.available:
+                counts[entity.area_id] = counts.get(entity.area_id, 0) + 1
+        return counts
+
+    def areas_payload(self, include_disabled: bool = False) -> list[dict]:
+        return [
+            city.to_dict()
+            for city in self._cities.list(
+                self.area_counts(),
+                include_disabled=include_disabled,
+                active_button_counts=self.active_area_counts(),
+            )
+        ]
+
+
+    def entity_area_map(self) -> dict[str, dict[str, str | None]]:
+        return {
+            entity_id: {
+                'area_id': entity.area_id,
+                'area_name': entity.area_name,
+                'sound_path': entity.sound_path,
+                'sound_repeat_mode': entity.sound_repeat_mode,
+                'sound_repeat_seconds': entity.sound_repeat_seconds,
+                'sound_repeat_count': entity.sound_repeat_count,
+                'ack_button_text': entity.ack_button_text,
+            }
+            for entity_id, entity in self._entities.items()
+        }
+
+
+    async def refresh_areas_from_ha(self) -> None:
+        registry = await self._load_registry_safe()
+        area_names = self._area_names(registry)
+        if area_names:
+            self._sync_cities(area_names)
+            await self._set_status(self._tracked_status())
+
+    async def reload_entities(self) -> None:
+        await self._load_entities()
+        self._history_synced = False
+        await self._sync_recent_history_once()
+        self.last_error = None
+        await self._set_status(self._tracked_status())
 
     async def start(self) -> None:
         if self._task and not self._task.done():
@@ -85,6 +169,8 @@ class HomeAssistantWatcher:
                 'type': 'state',
                 'status': self.status_message,
                 'watched_count': self.watched_count,
+                'active_watched_count': self.active_watched_count,
+                'areas': self.areas_payload(),
                 'last_error': self.last_error,
             }
         )
@@ -114,7 +200,7 @@ class HomeAssistantWatcher:
                 len(self._entities),
             )
         await self._sync_recent_history_once()
-        await self._set_status(f'Отслеживается кнопок: {self.watched_count}')
+        await self._set_status(self._tracked_status())
 
         websocket = await self._client.connect_websocket()
         try:
@@ -127,10 +213,10 @@ class HomeAssistantWatcher:
 
 
     async def _sync_recent_history_once(self) -> None:
-        if self._history_synced or self._config.ha_sync_history_hours <= 0 or not self._entities:
+        if self._history_synced or not self._entities:
             return
 
-        await self._set_status(f'Синхронизация истории за {self._config.ha_sync_history_hours:g} ч...')
+        await self._set_status('Синхронизация истории...')
 
         try:
             added_count = await self._sync_recent_history()
@@ -145,6 +231,8 @@ class HomeAssistantWatcher:
                 'type': 'history_sync',
                 'status': f'История синхронизирована: +{added_count}',
                 'watched_count': self.watched_count,
+                'active_watched_count': self.active_watched_count,
+                'areas': self.areas_payload(),
                 'last_error': self.last_error,
             })
             self._logger.info('HA history sync added %s press events.', added_count)
@@ -154,11 +242,69 @@ class HomeAssistantWatcher:
     async def _sync_recent_history(self) -> int:
         local_tz = datetime.now().astimezone().tzinfo or ZoneInfo('Europe/Moscow')
         end_time = datetime.now(tz=local_tz)
-        start_time = end_time - timedelta(hours=self._config.ha_sync_history_hours)
-        entity_ids = list(self._entities.keys())
+        city_settings = {city.area_id: city for city in self._cities.list(self.area_counts(), include_disabled=True)}
+        entity_groups: dict[float, list[str]] = {}
+        for entity in self._entities.values():
+            hours = self._config.ha_sync_history_hours
+            if entity.area_id and entity.area_id in city_settings and city_settings[entity.area_id].history_sync_hours is not None:
+                hours = city_settings[entity.area_id].history_sync_hours or 0
+            if hours <= 0:
+                continue
+            entity_groups.setdefault(float(hours), []).append(entity.entity_id)
+
         added_count = 0
 
-        for chunk in self._chunks(entity_ids, 20):
+        for hours, entity_ids in entity_groups.items():
+            start_time = end_time - timedelta(hours=hours)
+            for chunk in self._chunks(entity_ids, 20):
+                histories = await self._client.get_history(
+                    start_time.isoformat(timespec='seconds'),
+                    end_time.isoformat(timespec='seconds'),
+                    chunk,
+                )
+                added_count += self._import_history_rows(histories, local_tz)
+
+        return added_count
+
+    async def sync_history_for_area(self, area_id: str, hours: float | None = None) -> dict[str, Any]:
+        if not self._entities:
+            await self._load_entities()
+
+        selected_entities = [
+            entity.entity_id
+            for entity in self._entities.values()
+            if entity.area_id == area_id
+        ]
+        if not selected_entities:
+            return {
+                'area_id': area_id,
+                'entity_count': 0,
+                'added': 0,
+                'hours': hours,
+                'status': 'no_entities',
+            }
+
+        if hours is None:
+            city_settings = {city.area_id: city for city in self._cities.list(self.area_counts(), include_disabled=True)}
+            city = city_settings.get(area_id)
+            hours = city.history_sync_hours if city and city.history_sync_hours is not None else self._config.ha_sync_history_hours
+
+        hours = max(0, float(hours or 0))
+        if hours <= 0:
+            return {
+                'area_id': area_id,
+                'entity_count': len(selected_entities),
+                'added': 0,
+                'hours': hours,
+                'status': 'disabled',
+            }
+
+        local_tz = datetime.now().astimezone().tzinfo or ZoneInfo('Europe/Moscow')
+        end_time = datetime.now(tz=local_tz)
+        start_time = end_time - timedelta(hours=hours)
+        added_count = 0
+
+        for chunk in self._chunks(selected_entities, 20):
             histories = await self._client.get_history(
                 start_time.isoformat(timespec='seconds'),
                 end_time.isoformat(timespec='seconds'),
@@ -166,7 +312,22 @@ class HomeAssistantWatcher:
             )
             added_count += self._import_history_rows(histories, local_tz)
 
-        return added_count
+        await self._broadcast({
+            'type': 'history_sync',
+            'status': f'История синхронизирована: +{added_count}',
+            'watched_count': self.watched_count,
+            'active_watched_count': self.active_watched_count,
+            'areas': self.areas_payload(),
+            'last_error': self.last_error,
+        })
+        self._logger.info('Manual HA history sync for area %s added %s press events.', area_id, added_count)
+        return {
+            'area_id': area_id,
+            'entity_count': len(selected_entities),
+            'added': added_count,
+            'hours': hours,
+            'status': 'ok',
+        }
 
     def _import_history_rows(self, histories: list[list[dict[str, Any]]], local_tz) -> int:
         added_count = 0
@@ -203,6 +364,8 @@ class HomeAssistantWatcher:
                     entity.name,
                     local_changed_at.replace(tzinfo=None).isoformat(timespec='seconds'),
                     local_changed_at.strftime('%Y-%m-%d %H:%M:%S'),
+                    entity.area_id,
+                    entity.area_name,
                 )
                 if added:
                     added_count += 1
@@ -224,19 +387,94 @@ class HomeAssistantWatcher:
 
     async def _load_entities(self) -> None:
         states = await self._client.get_states()
+        registry = await self._load_registry_safe()
+        area_names = self._area_names(registry)
+        entity_area_ids = self._entity_area_ids(registry)
         entities: dict[str, WatchedEntity] = {}
 
         for state in states:
             if not self._is_watched_state(state):
                 continue
             entity_id = str(state.get('entity_id'))
+            area_id = entity_area_ids.get(entity_id)
+            area_name = area_names.get(area_id or '') if area_id else None
             name = self._entity_name(state)
-            entities[entity_id] = WatchedEntity(entity_id=entity_id, name=name)
-            self._logger.info('Discovered HA button: %s (%s)', name, entity_id)
+            entities[entity_id] = WatchedEntity(
+                entity_id=entity_id,
+                name=name,
+                area_id=area_id,
+                area_name=area_name,
+                available=self._is_available_state(str(state.get('state') or '')),
+            )
+            self._logger.info('Discovered HA button: %s (%s, area=%s)', name, entity_id, area_name or '-')
 
         self._entities = entities
+        self._sync_cities(area_names)
         if not self._entities:
             self._logger.warning('No Home Assistant entities matched current filters.')
+
+    async def _load_registry_safe(self) -> dict[str, list[dict[str, Any]]]:
+        try:
+            return await self._client.get_registry()
+        except Exception as exc:
+            self._logger.warning('HA registry unavailable; city mapping disabled for now: %s', exc)
+            return {'areas': [], 'devices': [], 'entities': []}
+
+    def _sync_cities(self, area_names: dict[str, str]) -> None:
+        areas = [
+            {'area_id': area_id, 'name': name}
+            for area_id, name in area_names.items()
+        ]
+        self._cities.sync_from_ha_areas(areas, self.area_counts())
+        self.refresh_city_settings()
+
+    def refresh_city_settings(self) -> None:
+        display_names = self._cities.names_by_area_id()
+        city_settings = {city.area_id: city for city in self._cities.list(self.area_counts(), include_disabled=True)}
+        self._entities = {
+            entity_id: WatchedEntity(
+                entity_id=entity.entity_id,
+                name=entity.name,
+                area_id=entity.area_id,
+                area_name=display_names.get(entity.area_id or '', entity.area_name),
+                sound_path=city_settings.get(entity.area_id or '').sound_path if city_settings.get(entity.area_id or '') else None,
+                sound_repeat_mode=city_settings.get(entity.area_id or '').sound_repeat_mode if city_settings.get(entity.area_id or '') else None,
+                sound_repeat_seconds=city_settings.get(entity.area_id or '').sound_repeat_seconds if city_settings.get(entity.area_id or '') else None,
+                sound_repeat_count=city_settings.get(entity.area_id or '').sound_repeat_count if city_settings.get(entity.area_id or '') else None,
+                ack_button_text=city_settings.get(entity.area_id or '').ack_button_text if city_settings.get(entity.area_id or '') else None,
+                available=entity.available,
+            )
+            for entity_id, entity in self._entities.items()
+        }
+        updated_rows = self._history.backfill_areas({
+            entity.entity_id: (entity.area_id, entity.area_name)
+            for entity in self._entities.values()
+        })
+        if updated_rows:
+            self._logger.info('Backfilled area data for %s history rows.', updated_rows)
+
+    @staticmethod
+    def _area_names(registry: dict[str, list[dict[str, Any]]]) -> dict[str, str]:
+        return {str(area.get('area_id')): str(area.get('name') or area.get('area_id')) for area in registry.get('areas', []) if area.get('area_id')}
+
+    @staticmethod
+    def _entity_area_ids(registry: dict[str, list[dict[str, Any]]]) -> dict[str, str]:
+        device_area_ids = {
+            str(device.get('id')): str(device.get('area_id'))
+            for device in registry.get('devices', [])
+            if device.get('id') and device.get('area_id')
+        }
+        mapping: dict[str, str] = {}
+        for entity in registry.get('entities', []):
+            entity_id = str(entity.get('entity_id') or '')
+            if not entity_id:
+                continue
+            area_id = entity.get('area_id')
+            if not area_id and entity.get('device_id'):
+                area_id = device_area_ids.get(str(entity.get('device_id')))
+            if area_id:
+                mapping[entity_id] = str(area_id)
+        return mapping
 
     def _is_watched_state(self, state: dict[str, Any]) -> bool:
         entity_id = str(state.get('entity_id') or '')
@@ -258,6 +496,10 @@ class HomeAssistantWatcher:
             return attributes.get('device_class') == self._config.ha_device_class
 
         return True
+
+    @staticmethod
+    def _is_available_state(value: str) -> bool:
+        return value.strip().lower() not in {'unavailable', 'unknown', ''}
 
     @staticmethod
     def _entity_name(state: dict[str, Any]) -> str:
@@ -292,13 +534,35 @@ class HomeAssistantWatcher:
 
         self._logger.info('HA state change: %s %s -> %s', entity.name, old_value, new_value)
 
+        fresh_name = self._entity_name(new_state) if isinstance(new_state, dict) else entity.name
+        new_available = self._is_available_state(new_value)
+        if (fresh_name and fresh_name != entity.name) or new_available != entity.available:
+            entity = WatchedEntity(
+                entity_id=entity_id,
+                name=fresh_name or entity.name,
+                area_id=entity.area_id,
+                area_name=entity.area_name,
+                sound_path=entity.sound_path,
+                sound_repeat_mode=entity.sound_repeat_mode,
+                sound_repeat_seconds=entity.sound_repeat_seconds,
+                sound_repeat_count=entity.sound_repeat_count,
+                ack_button_text=entity.ack_button_text,
+                available=new_available,
+            )
+            self._entities[entity_id] = entity
+            await self._broadcast(
+                {
+                    'type': 'availability',
+                    'status': self.status_message,
+                    'watched_count': self.watched_count,
+                    'active_watched_count': self.active_watched_count,
+                    'areas': self.areas_payload(),
+                    'last_error': self.last_error,
+                }
+            )
+
         if not self._is_trigger(old_value, new_value):
             return
-
-        fresh_name = self._entity_name(new_state) if isinstance(new_state, dict) else entity.name
-        if fresh_name and fresh_name != entity.name:
-            entity = WatchedEntity(entity_id=entity_id, name=fresh_name)
-            self._entities[entity_id] = entity
 
         press_event = self._create_press_event(entity)
         if not press_event:
@@ -310,6 +574,8 @@ class HomeAssistantWatcher:
                 'events': [press_event.to_dict()],
                 'status': 'Новых нажатий: 1',
                 'watched_count': self.watched_count,
+                'active_watched_count': self.active_watched_count,
+                'areas': self.areas_payload(),
                 'last_error': self.last_error,
             }
         )
@@ -333,6 +599,13 @@ class HomeAssistantWatcher:
             device_name=entity.name,
             pressed_at=pressed_at.isoformat(timespec='seconds'),
             pressed_at_display=pressed_at.strftime('%Y-%m-%d %H:%M:%S'),
+            area_id=entity.area_id,
+            area_name=entity.area_name,
+            sound_path=entity.sound_path,
+            sound_repeat_mode=entity.sound_repeat_mode,
+            sound_repeat_seconds=entity.sound_repeat_seconds,
+            sound_repeat_count=entity.sound_repeat_count,
+            ack_button_text=entity.ack_button_text,
         )
         added = self._history.add_press(
             event.id,
@@ -340,6 +613,8 @@ class HomeAssistantWatcher:
             event.device_name,
             event.pressed_at,
             event.pressed_at_display,
+            event.area_id,
+            event.area_name,
         )
         return event if added else None
 
@@ -350,6 +625,8 @@ class HomeAssistantWatcher:
                 'type': 'status',
                 'status': message,
                 'watched_count': self.watched_count,
+                'active_watched_count': self.active_watched_count,
+                'areas': self.areas_payload(),
                 'last_error': self.last_error,
             }
         )
@@ -364,3 +641,6 @@ class HomeAssistantWatcher:
 
         for websocket in dead_clients:
             self.unregister(websocket)
+
+    def _tracked_status(self) -> str:
+        return 'HA подключен'

@@ -31,10 +31,18 @@ class HistoryStore:
                 )
                 '''
             )
+            self._ensure_column(connection, 'press_history', 'area_id', 'TEXT')
+            self._ensure_column(connection, 'press_history', 'area_name', 'TEXT')
             connection.execute(
                 '''
                 CREATE INDEX IF NOT EXISTS idx_press_history_pressed_at
                 ON press_history (pressed_at DESC)
+                '''
+            )
+            connection.execute(
+                '''
+                CREATE INDEX IF NOT EXISTS idx_press_history_area_pressed_at
+                ON press_history (area_id, pressed_at DESC)
                 '''
             )
             connection.execute(
@@ -44,15 +52,30 @@ class HistoryStore:
                 '''
             )
 
-    def add_press(self, event_id: str, device_id: str, device_name: str, pressed_at: str, pressed_at_display: str) -> bool:
+    @staticmethod
+    def _ensure_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+        columns = {row['name'] for row in connection.execute(f'PRAGMA table_info({table})').fetchall()}
+        if column not in columns:
+            connection.execute(f'ALTER TABLE {table} ADD COLUMN {column} {definition}')
+
+    def add_press(
+        self,
+        event_id: str,
+        device_id: str,
+        device_name: str,
+        pressed_at: str,
+        pressed_at_display: str,
+        area_id: str | None = None,
+        area_name: str | None = None,
+    ) -> bool:
         with self._lock, self._connect() as connection:
             cursor = connection.execute(
                 '''
                 INSERT OR IGNORE INTO press_history
-                    (id, device_id, device_name, pressed_at, pressed_at_display)
-                VALUES (?, ?, ?, ?, ?)
+                    (id, device_id, device_name, pressed_at, pressed_at_display, area_id, area_name)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ''',
-                (event_id, device_id, device_name, pressed_at, pressed_at_display),
+                (event_id, device_id, device_name, pressed_at, pressed_at_display, area_id, area_name),
             )
             return cursor.rowcount > 0
 
@@ -91,18 +114,51 @@ class HistoryStore:
             )
         return cursor.rowcount
 
-    def page(self, page: int, page_size: int) -> dict:
-        offset = (page - 1) * page_size
+    def backfill_areas(self, entity_areas: dict[str, tuple[str | None, str | None]]) -> int:
+        if not entity_areas:
+            return 0
+
+        updates = [
+            (area_id, area_name, device_id)
+            for device_id, (area_id, area_name) in entity_areas.items()
+            if area_id
+        ]
+        if not updates:
+            return 0
+
         with self._lock, self._connect() as connection:
-            total = connection.execute('SELECT COUNT(*) FROM press_history').fetchone()[0]
-            rows = connection.execute(
+            cursor = connection.executemany(
                 '''
-                SELECT id, device_id, device_name, pressed_at, pressed_at_display, acknowledged_at, acknowledged_at_display
+                UPDATE press_history
+                SET area_id = COALESCE(area_id, ?),
+                    area_name = COALESCE(area_name, ?)
+                WHERE device_id = ?
+                  AND area_id IS NULL
+                ''',
+                updates,
+            )
+            return cursor.rowcount
+
+    def page(self, page: int, page_size: int, area_id: str | None = None) -> dict:
+        offset = (page - 1) * page_size
+        where = ''
+        params: list = []
+        if area_id:
+            where = 'WHERE area_id = ?'
+            params.append(area_id)
+
+        with self._lock, self._connect() as connection:
+            total = connection.execute(f'SELECT COUNT(*) FROM press_history {where}', params).fetchone()[0]
+            rows = connection.execute(
+                f'''
+                SELECT id, device_id, device_name, pressed_at, pressed_at_display,
+                       acknowledged_at, acknowledged_at_display, area_id, area_name
                 FROM press_history
+                {where}
                 ORDER BY pressed_at DESC
                 LIMIT ? OFFSET ?
                 ''',
-                (page_size, offset),
+                (*params, page_size, offset),
             ).fetchall()
 
         total_pages = max(1, (total + page_size - 1) // page_size)
@@ -112,4 +168,5 @@ class HistoryStore:
             'page_size': page_size,
             'total': total,
             'total_pages': total_pages,
+            'area_id': area_id,
         }
