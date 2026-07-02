@@ -33,6 +33,8 @@ class AppConfig:
     history_dedup_seconds: float
     admin_username: str
     admin_password: str
+    app_download_dir: Path
+    app_download_filename: str
 
 
 def _required(name: str) -> str:
@@ -65,6 +67,14 @@ def _path(name: str, default: str) -> Path:
     if not path.is_absolute():
         path = PROJECT_ROOT / path
     return path
+
+
+def _filename(name: str, default: str) -> str:
+    value = os.getenv(name, default).strip() or default
+    clean = Path(value).name.strip()
+    if not clean:
+        return default
+    return clean
 
 
 def _live_env_value(name: str) -> str | None:
@@ -129,4 +139,6 @@ def load_config() -> AppConfig:
         history_dedup_seconds=history_dedup_seconds,
         admin_username=os.getenv('ADMIN_USERNAME', 'admin').strip(),
         admin_password=os.getenv('ADMIN_PASSWORD', 'admin').strip(),
+        app_download_dir=_path('APP_DOWNLOAD_DIR', 'static/downloads'),
+        app_download_filename=_filename('APP_DOWNLOAD_FILENAME', 'PereHomeLabKiosk.exe'),
     )

@@ -2,7 +2,9 @@ FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    TZ=Europe/Moscow
+    TZ=Europe/Moscow \
+    APP_DOWNLOAD_DIR=/download-app \
+    APP_DOWNLOAD_FILENAME=PereHomeLabKiosk.exe
 
 WORKDIR /app
 
@@ -17,13 +19,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 COPY static ./static
-COPY sound ./sound
 COPY main.py ./main.py
 COPY check_ha.py ./check_ha.py
 COPY secret.env.example ./secret.env.example
 COPY README.md ./README.md
 
-RUN mkdir -p /app/data /app/logs \
+RUN mkdir -p /app/data /app/logs /app/sound /download-app \
     && find /app -type d -name __pycache__ -prune -exec rm -rf {} + \
     && find /app -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
 

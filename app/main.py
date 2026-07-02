@@ -26,7 +26,7 @@ from app.watcher import HomeAssistantWatcher
 logger = configure_logging()
 config = load_config()
 logger.info(
-    'Config loaded: HA_URL=%s, token_length=%s, auto_discover=%s, domain=%s, device_class=%s, trigger=%s, history_sync_hours=%s, db=%s, sound=%s',
+    'Config loaded: HA_URL=%s, token_length=%s, auto_discover=%s, domain=%s, device_class=%s, trigger=%s, history_sync_hours=%s, db=%s, sound=%s, app_download=%s/%s',
     config.ha_url,
     len(config.ha_token),
     config.ha_auto_discover,
@@ -36,6 +36,8 @@ logger.info(
     config.ha_sync_history_hours,
     config.history_db_path,
     config.button_sound,
+    config.app_download_dir,
+    config.app_download_filename,
 )
 history = HistoryStore(config.history_db_path)
 cities = CityStore(config.history_db_path)
@@ -72,6 +74,18 @@ def safe_sound_filename(filename: str) -> str:
         raise HTTPException(status_code=400, detail='Only mp3, wav and ogg files are allowed')
     return clean
 
+
+
+
+def resolve_app_download_path() -> Path | None:
+    candidates = [
+        config.app_download_dir / config.app_download_filename,
+        PROJECT_ROOT / 'static' / 'downloads' / config.app_download_filename,
+    ]
+    for path in candidates:
+        if path.exists() and path.is_file():
+            return path
+    return None
 
 def recent_error_log_items(limit: int) -> list[dict]:
     markers = ('ERROR', 'WARNING', 'Traceback', 'Home Assistant', 'HA ')
@@ -199,6 +213,19 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title='PereHomeLab', lifespan=lifespan)
 app.mount('/static', StaticFiles(directory=PROJECT_ROOT / 'static'), name='static')
 app.mount('/sound', StaticFiles(directory=PROJECT_ROOT / 'sound'), name='sound')
+
+
+@app.get('/download-app')
+async def download_app() -> FileResponse:
+    path = resolve_app_download_path()
+    if path is None:
+        logger.warning('App download file not found: dir=%s, filename=%s', config.app_download_dir, config.app_download_filename)
+        raise HTTPException(status_code=404, detail='Application file not found')
+    return FileResponse(
+        path,
+        media_type='application/octet-stream',
+        filename=config.app_download_filename,
+    )
 
 
 @app.get('/')
@@ -557,6 +584,8 @@ async def client_config() -> dict:
         'status_code': config.ha_trigger_to,
         'poll_interval_seconds': 0,
         'sync_history_hours': config.ha_sync_history_hours,
+        'app_download_url': '/download-app',
+        'app_download_filename': config.app_download_filename,
     }
 
 

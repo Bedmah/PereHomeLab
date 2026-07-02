@@ -5,6 +5,9 @@ secret.env
 *.swp
 logs
 data
+sound/*
+!sound/.gitkeep
+static/downloads/*.exe
 __pycache__
 *.pyc
 *.pyo

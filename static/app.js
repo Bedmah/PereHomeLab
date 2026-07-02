@@ -70,7 +70,8 @@ let soundRepeatRemaining = null;
 let refreshInProgress = false;
 const historyPageSize = 100;
 const freshHighlightMs = 5 * 60 * 1000;
-const volumeStorageKey = "perehomelab-alert-volume";
+const defaultVolumePercent = 100;
+const volumeStorageKey = "perehomelab-alert-volume-v2";
 
 const pathAreaSlug = decodeURIComponent(window.location.pathname.replace(/^\/+|\/+$/g, ""));
 if (pathAreaSlug && !["monitor", "admin"].includes(pathAreaSlug)) {
@@ -142,13 +143,13 @@ function shortHaError(value) {
 function loadSavedVolume() {
   const savedValue = Number(localStorage.getItem(volumeStorageKey));
   if (!Number.isFinite(savedValue)) {
-    return 100;
+    return defaultVolumePercent;
   }
   return Math.max(0, Math.min(100, Math.round(savedValue)));
 }
 
 function applyVolume(percent, save = true) {
-  const cleanPercent = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+  const cleanPercent = Math.max(0, Math.min(100, Math.round(Number(percent) || defaultVolumePercent)));
   alertAudio.volume = cleanPercent / 100;
   volumeSlider.value = String(cleanPercent);
   volumeInput.value = String(cleanPercent);
