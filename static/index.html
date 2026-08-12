@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Переговорки</title>
     <link rel="icon" type="image/png" href="/static/assets/yadro-logo.png" />
-    <link rel="stylesheet" href="/static/styles.css?v=87" />
+    <link rel="stylesheet" href="/static/styles.css?v=88" />
   </head>
   <body>
     <main class="screen">
@@ -36,27 +36,6 @@
           <button id="enableSoundButton" class="sound-button" type="button">Звук</button>
           <a class="download-button" href="/download-app" download>Скачать</a>
           <a class="download-button" href="/">Главная</a>
-          <section id="volumeWidget" class="volume-widget">
-            <button id="volumeToggleButton" class="volume-toggle" type="button" aria-expanded="false" title="Громкость уведомлений">
-              <span>🔊</span>
-              <strong id="volumeBadge">100%</strong>
-            </button>
-            <div id="volumePanel" class="volume-panel hidden">
-              <div class="volume-panel-head">
-                <span class="section-label">Sound</span>
-                <button id="volumeCloseButton" class="details-close small-close" type="button">×</button>
-              </div>
-              <h2>Громкость</h2>
-              <label class="volume-control" title="Громкость уведомлений">
-                <strong id="volumeValue">100%</strong>
-                <input id="volumeSlider" type="range" min="0" max="100" step="1" value="100" />
-              </label>
-              <label class="volume-number">
-                <input id="volumeInput" type="number" min="0" max="100" step="1" value="100" inputmode="numeric" />
-              </label>
-              <button id="volumeTestButton" class="volume-test-button" type="button">Проверить</button>
-            </div>
-          </section>
         </div>
       </section>
 
@@ -96,6 +75,28 @@
         </section>
       </section>
     </main>
+
+    <section id="volumeWidget" class="volume-widget">
+      <button id="volumeToggleButton" class="volume-toggle" type="button" aria-expanded="false" title="Громкость уведомлений">
+        <span>🔊</span>
+        <strong id="volumeBadge">100%</strong>
+      </button>
+      <div id="volumePanel" class="volume-panel hidden">
+        <div class="volume-panel-head">
+          <span class="section-label">Sound</span>
+          <button id="volumeCloseButton" class="details-close small-close" type="button">×</button>
+        </div>
+        <h2>Громкость</h2>
+        <label class="volume-control" title="Громкость уведомлений">
+          <strong id="volumeValue">100%</strong>
+          <input id="volumeSlider" type="range" min="0" max="100" step="1" value="100" />
+        </label>
+        <label class="volume-number">
+          <input id="volumeInput" type="number" min="0" max="100" step="1" value="100" inputmode="numeric" />
+        </label>
+        <button id="volumeTestButton" class="volume-test-button" type="button">Проверить</button>
+      </div>
+    </section>
 
     <section id="popup" class="popup hidden">
       <div class="popup-card">
