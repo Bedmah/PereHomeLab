@@ -51,6 +51,15 @@ class HistoryStore:
                 ON press_history (device_id, pressed_at)
                 '''
             )
+            connection.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS runtime_state (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                '''
+            )
 
     @staticmethod
     def _ensure_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:
@@ -170,3 +179,37 @@ class HistoryStore:
             'total_pages': total_pages,
             'area_id': area_id,
         }
+
+    def latest_press(self) -> dict | None:
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                '''
+                SELECT id, device_id, device_name, pressed_at, pressed_at_display,
+                       acknowledged_at, acknowledged_at_display, area_id, area_name
+                FROM press_history
+                ORDER BY pressed_at DESC
+                LIMIT 1
+                '''
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_runtime_state(self, key: str) -> str | None:
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                'SELECT value FROM runtime_state WHERE key = ?',
+                (key,),
+            ).fetchone()
+        return str(row['value']) if row else None
+
+    def set_runtime_state(self, key: str, value: str, updated_at: str) -> None:
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                '''
+                INSERT INTO runtime_state (key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at
+                ''',
+                (key, value, updated_at),
+            )

@@ -1,6 +1,20 @@
 const statusText = document.querySelector("#statusText");
 const watchedCount = document.querySelector("#watchedCount");
 const connectionBadge = document.querySelector("#connectionBadge");
+const systemStatusButton = document.querySelector("#systemStatusButton");
+const statusMeta = document.querySelector("#statusMeta");
+const systemStatusModal = document.querySelector("#systemStatusModal");
+const systemStatusCloseButton = document.querySelector("#systemStatusCloseButton");
+const systemOverallDot = document.querySelector("#systemOverallDot");
+const systemStatusTitle = document.querySelector("#systemStatusTitle");
+const systemStatusUpdated = document.querySelector("#systemStatusUpdated");
+const systemConnectionList = document.querySelector("#systemConnectionList");
+const systemUnavailableBlock = document.querySelector("#systemUnavailableBlock");
+const systemUnavailableTitle = document.querySelector("#systemUnavailableTitle");
+const systemUnavailableList = document.querySelector("#systemUnavailableList");
+const systemErrorBlock = document.querySelector("#systemErrorBlock");
+const systemCheckButton = document.querySelector("#systemCheckButton");
+const systemCheckResult = document.querySelector("#systemCheckResult");
 const enableSoundButton = document.querySelector("#enableSoundButton");
 const volumeWidget = document.querySelector("#volumeWidget");
 const volumeToggleButton = document.querySelector("#volumeToggleButton");
@@ -68,6 +82,8 @@ let soundStopTimer = null;
 let soundLoopActive = false;
 let soundRepeatRemaining = null;
 let refreshInProgress = false;
+let browserSocketConnected = false;
+let latestSystemStatus = null;
 const historyPageSize = 100;
 const freshHighlightMs = 5 * 60 * 1000;
 const defaultVolumePercent = 100;
@@ -123,6 +139,252 @@ function setConnection(state) {
   connectionBadge.className = `dot ${state}`;
 }
 
+function parseStatusDate(value) {
+  if (!value) {
+    return null;
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function relativeTime(value) {
+  const date = parseStatusDate(value);
+  if (!date) {
+    return "нет данных";
+  }
+  const seconds = Math.max(0, Math.round((Date.now() - date.getTime()) / 1000));
+  if (seconds < 10) return "только что";
+  if (seconds < 60) return `${seconds} сек. назад`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} мин. назад`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} ч. назад`;
+  return `${Math.floor(hours / 24)} дн. назад`;
+}
+
+function shortStatusDate(value) {
+  const date = parseStatusDate(value);
+  if (!date) return "нет данных";
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(date);
+}
+
+function uptimeText(value) {
+  const date = parseStatusDate(value);
+  if (!date) return "нет данных";
+  const minutes = Math.max(0, Math.floor((Date.now() - date.getTime()) / 60000));
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  if (days) return `${days} дн. ${hours} ч.`;
+  if (hours) return `${hours} ч. ${minutes % 60} мин.`;
+  return `${minutes} мин.`;
+}
+
+function statusClass(state) {
+  if (state === "ok") return "ok";
+  if (state === "warning" || state === "starting") return "wait";
+  return "error";
+}
+
+function updateTopSystemStatus() {
+  if (!latestSystemStatus) {
+    statusText.textContent = browserSocketConnected ? "Проверка HA" : "Подключение";
+    statusMeta.textContent = "Получаем состояние системы";
+    setConnection(browserSocketConnected ? "wait" : "error");
+    return;
+  }
+
+  if (!browserSocketConnected) {
+    statusText.textContent = "Нет канала событий";
+    statusMeta.textContent = "Переподключаем браузер к PereHomeLab";
+    setConnection("error");
+    return;
+  }
+
+  const state = latestSystemStatus.overall || "starting";
+  if (state === "ok") {
+    statusText.textContent = "HA подключен";
+  } else if (state === "warning") {
+    statusText.textContent = "Есть предупреждение";
+  } else if (state === "error") {
+    statusText.textContent = "Проблема с HA";
+  } else {
+    statusText.textContent = "Проверка HA";
+  }
+  const active = Number(latestSystemStatus.active_watched_count) || 0;
+  const total = Number(latestSystemStatus.watched_count) || 0;
+  statusMeta.textContent = `Кнопки ${active}/${total} · проверка ${relativeTime(latestSystemStatus.last_api_check_at)}`;
+  setConnection(statusClass(state));
+}
+
+function appendSystemRow(label, state, value, detail = "") {
+  const row = document.createElement("div");
+  row.className = "system-connection-row";
+  const dot = document.createElement("span");
+  dot.className = `dot ${statusClass(state)}`;
+  const copy = document.createElement("div");
+  const title = document.createElement("strong");
+  title.textContent = label;
+  const text = document.createElement("span");
+  text.textContent = value;
+  copy.append(title, text);
+  if (detail) {
+    const small = document.createElement("small");
+    small.textContent = detail;
+    copy.appendChild(small);
+  }
+  row.append(dot, copy);
+  systemConnectionList.appendChild(row);
+}
+
+function renderSystemStatus() {
+  updateTopSystemStatus();
+  if (!latestSystemStatus) return;
+
+  const system = latestSystemStatus;
+  const visibleOverall = browserSocketConnected ? system.overall : "error";
+  systemOverallDot.className = `dot ${statusClass(visibleOverall)}`;
+  systemStatusTitle.textContent = browserSocketConnected
+    ? (system.summary || "Состояние системы")
+    : "Нет канала событий в браузер";
+  systemStatusUpdated.textContent = `Обновлено: ${relativeTime(system.last_api_check_at)}`;
+  systemConnectionList.innerHTML = "";
+
+  appendSystemRow(
+    "Браузер → PereHomeLab",
+    browserSocketConnected ? "ok" : "error",
+    browserSocketConnected ? "подключено" : "нет связи",
+  );
+  appendSystemRow(
+    "Home Assistant API",
+    system.ha_api_ok === true ? "ok" : system.ha_api_ok === false ? "error" : "starting",
+    system.ha_api_ok === true ? "доступен" : system.ha_api_ok === false ? "не отвечает" : "проверяется",
+    `Последняя проверка: ${relativeTime(system.last_api_check_at)}`,
+  );
+  appendSystemRow(
+    "Канал событий HA",
+    system.ha_ws_connected ? "ok" : "error",
+    system.ha_ws_connected ? "подключён" : "переподключается",
+    `Переподключений: ${Number(system.reconnect_count) || 0}`,
+  );
+  const tuyaEntriesTotal = Number(system.tuya_entries_total) || 0;
+  const tuyaEntriesLoaded = Number(system.tuya_entries_loaded) || 0;
+  appendSystemRow(
+    "Интеграция Tuya в HA",
+    system.tuya_integration_loaded === true ? "ok" : system.tuya_integration_loaded === false ? "error" : "starting",
+    system.tuya_integration_loaded === true
+      ? `загружена (${tuyaEntriesLoaded}/${tuyaEntriesTotal})`
+      : system.tuya_integration_loaded === false
+        ? `загружено ${tuyaEntriesLoaded} из ${tuyaEntriesTotal}`
+        : "проверяется",
+    `Последняя проверка: ${relativeTime(system.last_tuya_check_at)}`,
+  );
+  const tuyaEndpoints = system.tuya_endpoints || {};
+  ["apigw.tuyaeu.com", "apigw.iotbing.com"].forEach((host) => {
+    const endpoint = tuyaEndpoints[host] || {};
+    const endpointState = endpoint.reachable === true
+      ? (endpoint.recent_error ? "warning" : "ok")
+      : endpoint.reachable === false ? "error" : "starting";
+    const endpointDetail = endpoint.last_error
+      ? `${endpoint.last_error}: ${shortStatusDate(endpoint.last_error_at)}`
+      : "Свежих ошибок по адресу в журнале HA нет";
+    appendSystemRow(
+      `Tuya · ${host}`,
+      endpointState,
+      endpoint.reachable === true
+        ? (endpoint.recent_error ? "доступен, но недавно была ошибка" : "доступен")
+        : endpoint.reachable === false ? "не отвечает" : "проверяется",
+      endpointDetail,
+    );
+  });
+  appendSystemRow(
+    "История нажатий",
+    system.history_sync_error ? "error" : system.history_stale ? "warning" : "ok",
+    system.history_sync_error ? "ошибка синхронизации" : `проверена ${relativeTime(system.last_history_sync_at)}`,
+    `Последняя полная проверка: ${shortStatusDate(system.last_history_sync_at)}`,
+  );
+  const unavailableCount = Number(system.unavailable_count) || 0;
+  appendSystemRow(
+    "Кнопки",
+    unavailableCount ? "warning" : "ok",
+    `доступно ${Number(system.active_watched_count) || 0} из ${Number(system.watched_count) || 0}`,
+    unavailableCount ? `Недоступно: ${unavailableCount}` : "Все обнаруженные кнопки доступны",
+  );
+  appendSystemRow(
+    "Последнее нажатие",
+    system.last_press_at ? "ok" : "starting",
+    system.last_press_name || "пока нет данных",
+    system.last_press_at ? shortStatusDate(system.last_press_at) : "",
+  );
+  appendSystemRow(
+    "PereHomeLab",
+    "ok",
+    `версия ${system.app_version || "—"}`,
+    `Работает: ${uptimeText(system.started_at)}`,
+  );
+
+  const unavailableItems = system.unavailable_entities || [];
+  systemUnavailableBlock.classList.toggle("hidden", unavailableItems.length === 0);
+  systemUnavailableTitle.textContent = `Недоступные кнопки (${unavailableCount})`;
+  systemUnavailableList.innerHTML = "";
+  unavailableItems.forEach((item) => {
+    const line = document.createElement("div");
+    line.textContent = item.area_name ? `${item.name} · ${item.area_name}` : item.name;
+    systemUnavailableList.appendChild(line);
+  });
+
+  const errorText = system.last_error
+    || system.history_sync_error
+    || system.tuya_check_error
+    || (system.tuya_recent_error ? system.tuya_last_error : "")
+    || "";
+  systemErrorBlock.classList.toggle("hidden", !errorText);
+  systemErrorBlock.textContent = errorText ? `Последняя ошибка: ${shortHaError(errorText)}` : "";
+}
+
+async function loadSystemStatus() {
+  try {
+    const response = await fetch("/api/system-status", { cache: "no-store" });
+    if (!response.ok) throw new Error("status unavailable");
+    latestSystemStatus = await response.json();
+    renderSystemStatus();
+  } catch {
+    updateTopSystemStatus();
+  }
+}
+
+function openSystemStatus() {
+  systemStatusModal.classList.remove("hidden");
+  loadSystemStatus();
+}
+
+function closeSystemStatus() {
+  systemStatusModal.classList.add("hidden");
+}
+
+async function checkSystemNow() {
+  systemCheckButton.disabled = true;
+  systemCheckButton.textContent = "Проверяем...";
+  systemCheckResult.textContent = "Проверяем HA, Tuya, кнопки и историю";
+  try {
+    const response = await fetch("/api/system-status/check", { method: "POST" });
+    if (!response.ok) throw new Error("check failed");
+    latestSystemStatus = await response.json();
+    renderSystemStatus();
+    systemCheckResult.textContent = "Проверка завершена";
+  } catch {
+    systemCheckResult.textContent = "Не удалось выполнить проверку";
+  } finally {
+    systemCheckButton.disabled = false;
+    systemCheckButton.textContent = "Проверить сейчас";
+  }
+}
+
 function shortHaError(value) {
   if (!value) {
     return "";
@@ -141,7 +403,11 @@ function shortHaError(value) {
 }
 
 function loadSavedVolume() {
-  const savedValue = Number(localStorage.getItem(volumeStorageKey));
+  const rawValue = localStorage.getItem(volumeStorageKey);
+  if (rawValue === null || rawValue.trim() === "") {
+    return defaultVolumePercent;
+  }
+  const savedValue = Number(rawValue);
   if (!Number.isFinite(savedValue)) {
     return defaultVolumePercent;
   }
@@ -149,7 +415,11 @@ function loadSavedVolume() {
 }
 
 function applyVolume(percent, save = true) {
-  const cleanPercent = Math.max(0, Math.min(100, Math.round(Number(percent) || defaultVolumePercent)));
+  const numericPercent = Number(percent);
+  const cleanPercent = Math.max(
+    0,
+    Math.min(100, Math.round(Number.isFinite(numericPercent) ? numericPercent : defaultVolumePercent)),
+  );
   alertAudio.volume = cleanPercent / 100;
   volumeSlider.value = String(cleanPercent);
   volumeInput.value = String(cleanPercent);
@@ -251,27 +521,36 @@ function connectWebSocket() {
   const socket = new WebSocket(`${protocol}://${window.location.host}/ws`);
 
   socket.addEventListener("open", () => {
-    setConnection("ok");
+    browserSocketConnected = true;
+    renderSystemStatus();
     socket.send("hello");
   });
 
   socket.addEventListener("message", (event) => {
-    handleServerMessage(JSON.parse(event.data));
+    try {
+      handleServerMessage(JSON.parse(event.data));
+    } catch {
+      statusMeta.textContent = "Получен некорректный ответ сервера";
+    }
   });
 
   socket.addEventListener("close", () => {
-    setConnection("error");
-    statusText.textContent = "Нет связи";
+    browserSocketConnected = false;
+    renderSystemStatus();
     reconnectTimer = setTimeout(connectWebSocket, 2000);
   });
 
   socket.addEventListener("error", () => {
-    setConnection("error");
+    browserSocketConnected = false;
+    renderSystemStatus();
   });
 }
 
 function handleServerMessage(payload) {
-  if (payload.last_error) {
+  if (payload.system) {
+    latestSystemStatus = payload.system;
+    renderSystemStatus();
+  } else if (payload.last_error) {
     statusText.textContent = shortHaError(payload.last_error);
     setConnection("error");
   } else if (payload.status) {
@@ -330,7 +609,11 @@ function createCityTab(area) {
   if ((area.area_id || "") === selectedAreaId) {
     button.classList.add("active");
   }
-  button.innerHTML = `<span>${area.display_name}</span><strong>${formatButtonAvailability(area.active_button_count, area.button_count)}</strong>`;
+  const name = document.createElement("span");
+  name.textContent = area.display_name || area.area_id || "Без названия";
+  const availability = document.createElement("strong");
+  availability.textContent = formatButtonAvailability(area.active_button_count, area.button_count);
+  button.append(name, availability);
   button.addEventListener("click", () => selectArea(area.area_id || ""));
   return button;
 }
@@ -947,6 +1230,7 @@ volumeTestButton.addEventListener("click", testCurrentVolume);
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     setVolumePanelOpen(false);
+    closeSystemStatus();
   }
 });
 document.addEventListener("click", (event) => {
@@ -965,6 +1249,14 @@ detailsCloseButton.addEventListener("click", closeDetails);
 detailsModal.addEventListener("click", (event) => {
   if (event.target === detailsModal) {
     closeDetails();
+  }
+});
+systemStatusButton.addEventListener("click", openSystemStatus);
+systemStatusCloseButton.addEventListener("click", closeSystemStatus);
+systemCheckButton.addEventListener("click", checkSystemNow);
+systemStatusModal.addEventListener("click", (event) => {
+  if (event.target === systemStatusModal) {
+    closeSystemStatus();
   }
 });
 batteryCloseButton.addEventListener("click", closeBatteryDetails);
@@ -991,10 +1283,28 @@ applyVolume(loadSavedVolume(), false);
 async function initializePage() {
   await loadClientConfig();
   await loadAreas();
-  await Promise.all([loadHistory(), loadBatteries()]);
+  await Promise.all([loadHistory(), loadBatteries(), loadSystemStatus()]);
   setSoundEnabled(true);
 }
 
-initializePage().finally(connectWebSocket);
+initializePage().finally(() => {
+  connectWebSocket();
+  if (new URLSearchParams(window.location.search).get("system_status") === "open") {
+    setTimeout(openSystemStatus, 500);
+  }
+});
 setInterval(loadHistory, 30_000);
 setInterval(loadBatteries, 60_000);
+setInterval(loadSystemStatus, 15_000);
+
+requestAnimationFrame(() => document.body.classList.add("ui-ready"));
+
+document.addEventListener("pointerdown", (event) => {
+  const target = event.target.closest("button, a, .battery-item, .history-item");
+  if (!target || target.matches(":disabled")) return;
+  target.classList.add("ui-pressed");
+  const release = () => target.classList.remove("ui-pressed");
+  target.addEventListener("pointerup", release, { once: true });
+  target.addEventListener("pointercancel", release, { once: true });
+  target.addEventListener("pointerleave", release, { once: true });
+});

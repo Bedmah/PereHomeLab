@@ -7,6 +7,24 @@
 
 PereHomeLab подключается к Home Assistant, отслеживает кнопки переговорок, показывает нажатия в веб-интерфейсе, проигрывает звуковые уведомления, сохраняет историю, отображает заряд батарей и позволяет управлять регионами через админку.
 
+## Локальный запуск в WSL
+
+```bash
+cd ~/PereHomeLab
+chmod 600 secret.env
+./run.sh
+```
+
+После строки `Uvicorn running on http://0.0.0.0:8000` откройте
+`http://localhost:8000`. Остановить сервер можно сочетанием `Ctrl+C`.
+
+Проверка уже запущенного сервера без изменения рабочих данных:
+
+```bash
+cd ~/PereHomeLab
+.venv/bin/python tests/smoke_live.py
+```
+
 ## Возможности
 
 - Отслеживание кнопок через Home Assistant WebSocket API.
@@ -20,6 +38,9 @@ PereHomeLab подключается к Home Assistant, отслеживает �
 - Отображение заряда батарей и поиск по батареям.
 - Админка с пользователями, сменой пароля, блокировкой и логом входов.
 - Веб-логи ошибок backend / Home Assistant.
+- Постоянный статус связи и подробное окно состояния системы.
+- Проверка интеграции и облака Tuya с отображением последнего сбоя из журнала HA.
+- Автоматическое восстановление пропущенной истории после переподключения.
 - Скачивание Windows kiosk-приложения из веб-интерфейса.
 - Тёмный ТВ-интерфейс и Docker-ready запуск.
 
@@ -47,6 +68,10 @@ HA_TRIGGER_TO=on
 HA_RECONNECT_SECONDS=5
 HA_REFRESH_ENTITIES_ON_RECONNECT=false
 HA_SYNC_HISTORY_HOURS=24
+HA_HISTORY_RECONCILE_SECONDS=300
+HA_HISTORY_OVERLAP_SECONDS=30
+HA_HEALTHCHECK_SECONDS=30
+HA_ENTITY_REFRESH_SECONDS=900
 
 BUTTON_SOUND=sound/1.mp3
 SOUND_PLAY_SECONDS=25
@@ -59,6 +84,7 @@ ADMIN_PASSWORD=change_me
 
 APP_DOWNLOAD_DIR=/download-app
 APP_DOWNLOAD_FILENAME=PereHomeLabKiosk.exe
+APP_VERSION=0.1.0
 ```
 
 Запустите контейнер:
@@ -102,6 +128,10 @@ HA_URL=http://homeassistant:8123
 ```
 
 `HA_TOKEN` - долгоживущий токен Home Assistant.
+
+PereHomeLab проверяет доступность HA каждые 30 секунд, автоматически
+сверяет пропущенную историю каждые 5 минут и после каждого переподключения.
+Список сущностей и пространств обновляется каждые 15 минут.
 
 После изменения `secret.env` контейнер нужно пересоздать, потому что `docker restart` не перечитывает `--env-file`.
 

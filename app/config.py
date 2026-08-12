@@ -26,6 +26,10 @@ class AppConfig:
     ha_reconnect_seconds: float
     ha_refresh_entities_on_reconnect: bool
     ha_sync_history_hours: float
+    ha_history_reconcile_seconds: float
+    ha_history_overlap_seconds: float
+    ha_healthcheck_seconds: float
+    ha_entity_refresh_seconds: float
     ack_button_text: str
     button_sound: Path
     sound_play_seconds: float
@@ -35,6 +39,7 @@ class AppConfig:
     admin_password: str
     app_download_dir: Path
     app_download_filename: str
+    app_version: str
 
 
 def _required(name: str) -> str:
@@ -107,6 +112,10 @@ def load_config() -> AppConfig:
         sound_play_seconds = float(os.getenv('SOUND_PLAY_SECONDS', '25'))
         history_dedup_seconds = float(os.getenv('HISTORY_DEDUP_SECONDS', '3'))
         sync_history_hours = float(os.getenv('HA_SYNC_HISTORY_HOURS', '24'))
+        history_reconcile_seconds = float(os.getenv('HA_HISTORY_RECONCILE_SECONDS', '300'))
+        history_overlap_seconds = float(os.getenv('HA_HISTORY_OVERLAP_SECONDS', '30'))
+        healthcheck_seconds = float(os.getenv('HA_HEALTHCHECK_SECONDS', '30'))
+        entity_refresh_seconds = float(os.getenv('HA_ENTITY_REFRESH_SECONDS', '900'))
     except ValueError as exc:
         raise ConfigError('Numeric settings have invalid values.') from exc
 
@@ -118,6 +127,14 @@ def load_config() -> AppConfig:
         raise ConfigError('HISTORY_DEDUP_SECONDS must be 0 or greater.')
     if sync_history_hours < 0:
         raise ConfigError('HA_SYNC_HISTORY_HOURS must be 0 or greater.')
+    if history_reconcile_seconds < 15:
+        raise ConfigError('HA_HISTORY_RECONCILE_SECONDS must be at least 15.')
+    if history_overlap_seconds < 0:
+        raise ConfigError('HA_HISTORY_OVERLAP_SECONDS must be 0 or greater.')
+    if healthcheck_seconds < 10:
+        raise ConfigError('HA_HEALTHCHECK_SECONDS must be at least 10.')
+    if entity_refresh_seconds < 60:
+        raise ConfigError('HA_ENTITY_REFRESH_SECONDS must be at least 60.')
 
     return AppConfig(
         ha_url=_required('HA_URL').rstrip('/'),
@@ -132,6 +149,10 @@ def load_config() -> AppConfig:
         ha_reconnect_seconds=reconnect_seconds,
         ha_refresh_entities_on_reconnect=_bool('HA_REFRESH_ENTITIES_ON_RECONNECT', False),
         ha_sync_history_hours=sync_history_hours,
+        ha_history_reconcile_seconds=history_reconcile_seconds,
+        ha_history_overlap_seconds=history_overlap_seconds,
+        ha_healthcheck_seconds=healthcheck_seconds,
+        ha_entity_refresh_seconds=entity_refresh_seconds,
         ack_button_text=get_live_ack_button_text(),
         button_sound=_path('BUTTON_SOUND', 'sound/1.mp3'),
         sound_play_seconds=sound_play_seconds,
@@ -141,4 +162,5 @@ def load_config() -> AppConfig:
         admin_password=os.getenv('ADMIN_PASSWORD', 'admin').strip(),
         app_download_dir=_path('APP_DOWNLOAD_DIR', 'static/downloads'),
         app_download_filename=_filename('APP_DOWNLOAD_FILENAME', 'PereHomeLabKiosk.exe'),
+        app_version=os.getenv('APP_VERSION', '0.1.0').strip() or '0.1.0',
     )

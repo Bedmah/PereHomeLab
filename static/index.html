@@ -4,19 +4,23 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Переговорки</title>
-    <link rel="stylesheet" href="/static/styles.css?v=72" />
+    <link rel="icon" type="image/png" href="/static/assets/yadro-logo.png" />
+    <link rel="stylesheet" href="/static/styles.css?v=87" />
   </head>
   <body>
     <main class="screen">
       <header class="top-nav">
-        <div class="brand">
-          <div class="brand-mark">Y</div>
-          <div class="brand-text">YADRO</div>
-        </div>
-        <div class="nav-status">
+        <a class="brand" href="/" aria-label="YADRO — на главную">
+          <img class="brand-logo" src="/static/assets/yadro-logo.png" alt="YADRO" />
+        </a>
+        <button id="systemStatusButton" class="nav-status status-trigger" type="button" aria-haspopup="dialog" aria-controls="systemStatusModal">
           <span id="connectionBadge" class="dot wait"></span>
-          <span id="statusText">Подключение</span>
-        </div>
+          <span class="status-trigger-copy">
+            <strong id="statusText" aria-live="polite">Подключение</strong>
+            <small id="statusMeta">Проверяем Home Assistant</small>
+          </span>
+          <span class="status-trigger-arrow">›</span>
+        </button>
       </header>
 
       <section class="hero">
@@ -29,9 +33,30 @@
             <span>Доступно</span>
             <strong id="watchedCount">0</strong>
           </div>
-          <button id="enableSoundButton" class="sound-button">Звук</button>
+          <button id="enableSoundButton" class="sound-button" type="button">Звук</button>
           <a class="download-button" href="/download-app" download>Скачать</a>
           <a class="download-button" href="/">Главная</a>
+          <section id="volumeWidget" class="volume-widget">
+            <button id="volumeToggleButton" class="volume-toggle" type="button" aria-expanded="false" title="Громкость уведомлений">
+              <span>🔊</span>
+              <strong id="volumeBadge">100%</strong>
+            </button>
+            <div id="volumePanel" class="volume-panel hidden">
+              <div class="volume-panel-head">
+                <span class="section-label">Sound</span>
+                <button id="volumeCloseButton" class="details-close small-close" type="button">×</button>
+              </div>
+              <h2>Громкость</h2>
+              <label class="volume-control" title="Громкость уведомлений">
+                <strong id="volumeValue">100%</strong>
+                <input id="volumeSlider" type="range" min="0" max="100" step="1" value="100" />
+              </label>
+              <label class="volume-number">
+                <input id="volumeInput" type="number" min="0" max="100" step="1" value="100" inputmode="numeric" />
+              </label>
+              <button id="volumeTestButton" class="volume-test-button" type="button">Проверить</button>
+            </div>
+          </section>
         </div>
       </section>
 
@@ -43,7 +68,7 @@
               <span class="section-label">Battery</span>
               <h2>Заряд</h2>
             </div>
-            <button id="toggleBatteriesButton" class="mini-button">Показать все</button>
+            <button id="toggleBatteriesButton" class="mini-button" type="button">Показать все</button>
           </div>
           <div id="batterySummary" class="battery-summary">Самые разряженные</div>
           <label class="battery-search">
@@ -61,10 +86,10 @@
               <div id="historySummary" class="history-summary">История загружается</div>
             </div>
             <div class="pager">
-              <button id="prevPageButton" class="ghost-button">←</button>
+              <button id="prevPageButton" class="ghost-button" type="button" aria-label="Предыдущая страница">←</button>
               <div id="pageInfo" class="page-info">1 / 1</div>
-              <button id="nextPageButton" class="ghost-button">→</button>
-              <button id="refreshHistoryButton" class="ghost-button" title="Обновить историю и заряд">↻</button>
+              <button id="nextPageButton" class="ghost-button" type="button" aria-label="Следующая страница">→</button>
+              <button id="refreshHistoryButton" class="ghost-button" type="button" title="Обновить историю и заряд" aria-label="Обновить историю и заряд">↻</button>
             </div>
           </div>
           <div id="historyList" class="history-list"></div>
@@ -82,13 +107,13 @@
           <span id="popupCount" class="popup-count">1</span>
         </div>
         <div id="popupList" class="popup-list"></div>
-        <button id="clearPopupButton" class="fa-button popup-fa">...</button>
+        <button id="clearPopupButton" class="fa-button popup-fa" type="button">...</button>
       </div>
     </section>
 
     <section id="detailsModal" class="details-modal hidden">
       <div class="details-card">
-        <button id="detailsCloseButton" class="details-close">×</button>
+        <button id="detailsCloseButton" class="details-close" type="button" aria-label="Закрыть">×</button>
         <span class="section-label">Детали</span>
         <h2 id="detailsName">Переговорка</h2>
         <dl class="details-grid">
@@ -106,7 +131,7 @@
 
     <section id="batteryModal" class="details-modal hidden">
       <div class="details-card battery-details-card">
-        <button id="batteryCloseButton" class="details-close">×</button>
+        <button id="batteryCloseButton" class="details-close" type="button" aria-label="Закрыть">×</button>
         <span class="section-label">Battery</span>
         <h2 id="batteryDetailsName">Переговорка</h2>
         <div class="battery-details-percent" id="batteryDetailsPercent">—</div>
@@ -143,29 +168,31 @@
       </div>
     </section>
 
-    <section id="volumeWidget" class="volume-widget">
-      <button id="volumeToggleButton" class="volume-toggle" type="button" aria-expanded="false" title="Громкость уведомлений">
-        <span>🔊</span>
-        <strong id="volumeBadge">100%</strong>
-      </button>
-      <div id="volumePanel" class="volume-panel hidden">
-        <div class="volume-panel-head">
-          <span class="section-label">Sound</span>
-          <button id="volumeCloseButton" class="details-close small-close" type="button">×</button>
+    <section id="systemStatusModal" class="details-modal system-status-modal hidden" role="dialog" aria-modal="true" aria-labelledby="systemStatusTitle">
+      <div class="details-card system-status-card">
+        <button id="systemStatusCloseButton" class="details-close" type="button" aria-label="Закрыть">×</button>
+        <span class="section-label">System status</span>
+        <div class="system-status-heading">
+          <span id="systemOverallDot" class="dot wait"></span>
+          <div>
+            <h2 id="systemStatusTitle">Проверка системы</h2>
+            <div id="systemStatusUpdated" class="system-status-updated">Получаем актуальные данные</div>
+          </div>
         </div>
-        <h2>Громкость</h2>
-        <label class="volume-control" title="Громкость уведомлений">
-          <strong id="volumeValue">100%</strong>
-          <input id="volumeSlider" type="range" min="0" max="100" step="1" value="100" />
-        </label>
-        <label class="volume-number">
-          <input id="volumeInput" type="number" min="0" max="100" step="1" value="100" inputmode="numeric" />
-        </label>
-        <button id="volumeTestButton" class="volume-test-button" type="button">Проверить</button>
+        <div id="systemConnectionList" class="system-connection-list"></div>
+        <div id="systemUnavailableBlock" class="system-unavailable hidden">
+          <strong id="systemUnavailableTitle">Недоступные кнопки</strong>
+          <div id="systemUnavailableList"></div>
+        </div>
+        <div id="systemErrorBlock" class="system-error-block hidden"></div>
+        <div class="system-status-actions">
+          <button id="systemCheckButton" class="mini-button" type="button">Проверить сейчас</button>
+          <span id="systemCheckResult" class="system-check-result" role="status" aria-live="polite"></span>
+        </div>
       </div>
     </section>
 
     <audio id="alertAudio" preload="auto"></audio>
-    <script src="/static/app.js?v=72"></script>
+    <script src="/static/app.js?v=87"></script>
   </body>
 </html>

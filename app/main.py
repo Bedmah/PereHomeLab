@@ -26,7 +26,8 @@ from app.watcher import HomeAssistantWatcher
 logger = configure_logging()
 config = load_config()
 logger.info(
-    'Config loaded: HA_URL=%s, token_length=%s, auto_discover=%s, domain=%s, device_class=%s, trigger=%s, history_sync_hours=%s, db=%s, sound=%s, app_download=%s/%s',
+    'Config loaded: version=%s, HA_URL=%s, token_length=%s, auto_discover=%s, domain=%s, device_class=%s, trigger=%s, history_sync_hours=%s, db=%s, sound=%s, app_download=%s/%s',
+    config.app_version,
     config.ha_url,
     len(config.ha_token),
     config.ha_auto_discover,
@@ -243,9 +244,14 @@ async def admin_page(_: str = Depends(require_admin)) -> FileResponse:
     return FileResponse(PROJECT_ROOT / 'static' / 'admin.html')
 
 
+@app.get('/healthz')
+async def healthz() -> dict:
+    return {'status': 'ok', 'version': config.app_version}
+
+
 @app.get('/{area_slug}')
 async def monitor_area(area_slug: str) -> FileResponse:
-    reserved = {'api', 'admin', 'monitor', 'static', 'sound', 'ws'}
+    reserved = {'api', 'admin', 'monitor', 'static', 'sound', 'ws', 'healthz'}
     if area_slug in reserved:
         raise HTTPException(status_code=404, detail='Not found')
     return FileResponse(PROJECT_ROOT / 'static' / 'index.html')
@@ -258,7 +264,18 @@ async def status() -> dict:
         'watched_count': watcher.watched_count,
         'active_watched_count': watcher.active_watched_count,
         'last_error': watcher.last_error,
+        'system': watcher.system_snapshot(),
     }
+
+
+@app.get('/api/system-status')
+async def system_status() -> dict:
+    return watcher.system_snapshot()
+
+
+@app.post('/api/system-status/check')
+async def system_status_check() -> dict:
+    return await watcher.check_now()
 
 
 @app.get('/api/diagnostics')
@@ -287,6 +304,9 @@ async def diagnostics() -> dict:
         'ha_trigger_to': config.ha_trigger_to,
         'ha_reconnect_seconds': config.ha_reconnect_seconds,
         'ha_sync_history_hours': config.ha_sync_history_hours,
+        'ha_history_reconcile_seconds': config.ha_history_reconcile_seconds,
+        'ha_healthcheck_seconds': config.ha_healthcheck_seconds,
+        'app_version': config.app_version,
         'watched_count': watcher.watched_count,
         'active_watched_count': watcher.active_watched_count,
         'watcher_status': watcher.status_message,

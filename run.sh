@@ -5,5 +5,5 @@ if [ ! -d .venv ]; then
   python3 -m venv .venv
 fi
 . .venv/bin/activate
-pip install -r requirements.txt
-python main.py
+python -m pip install --disable-pip-version-check -r requirements.txt
+exec python main.py
