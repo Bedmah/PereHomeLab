@@ -12,7 +12,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.cities import CityStore, slugify
 from app.battery import collect_batteries
@@ -22,6 +22,7 @@ from app.history import HistoryStore
 from app.logging_config import configure_logging
 from app.users import UserStore
 from app.watcher import HomeAssistantWatcher
+from app.telegram_service import TelegramError, TelegramService
 
 logger = configure_logging()
 config = load_config()
@@ -46,6 +47,34 @@ users = UserStore(config.history_db_path)
 users.ensure_owner(config.admin_username, config.admin_password)
 ha_client = HomeAssistantClient(config)
 watcher = HomeAssistantWatcher(config, ha_client, history, cities, logger)
+telegram = TelegramService(config, history, cities, logger, watcher.broadcast_acknowledged)
+watcher.on_press = telegram.enqueue
+
+
+def call_event(item, city_settings=None):
+    event = dict(item)
+    if city_settings is None:
+        city_settings = {city.area_id: city for city in cities.list(include_disabled=True)}
+    city = city_settings.get(item.get('area_id'))
+    if city:
+        for field in ('sound_path', 'sound_repeat_mode', 'sound_repeat_seconds', 'sound_repeat_count', 'ack_button_text'):
+            event[field] = getattr(city, field)
+        event['area_name'] = city.display_name
+    return event
+
+
+def call_events(items):
+    if not items:
+        return []
+    settings = {city.area_id: city for city in cities.list(include_disabled=True)}
+    return [call_event(item, settings) for item in items]
+
+
+async def broadcast_call_change(items, action):
+    await watcher._broadcast({'type': 'call_updated', 'action': action, 'events': call_events(items)})
+
+
+telegram.on_change = broadcast_call_change
 
 
 
@@ -107,7 +136,34 @@ def recent_error_log_items(limit: int) -> list[dict]:
 
 
 class AcknowledgeRequest(BaseModel):
-    ids: list[str]
+    ids: list[str] = Field(max_length=1000)
+    revisions: dict[str, int] = Field(default_factory=dict, max_length=1000)
+
+
+class TelegramSettingsRequest(BaseModel):
+    enabled: bool = False
+    token: str | None = None
+    require_profile: bool | None = None
+    allow_reassign_any: bool | None = None
+
+
+class EmployeeUpdateRequest(BaseModel):
+    login: str = Field(max_length=100)
+    full_name: str = Field(max_length=150)
+    blocked: bool = False
+    profile_locked: bool | None = None
+    allowed_areas: list[str] | None = Field(default=None, max_length=500)
+    telegram_user_id: str | None = Field(default=None, max_length=20)
+
+
+class EmployeeCreateRequest(BaseModel):
+    login: str = Field(max_length=100)
+    full_name: str = Field(max_length=150)
+    telegram_user_id: str | None = Field(default=None, max_length=20)
+
+
+class TelegramSetupRequest(BaseModel):
+    setup_id: str
 
 
 security = HTTPBasic()
@@ -122,8 +178,8 @@ def _request_user_agent(request: Request) -> str | None:
 
 
 def require_admin(request: Request, credentials: HTTPBasicCredentials = Depends(security)) -> dict:
-    env_username_ok = secrets.compare_digest(credentials.username, config.admin_username)
-    env_password_ok = secrets.compare_digest(credentials.password, config.admin_password)
+    env_username_ok = secrets.compare_digest(credentials.username.encode('utf-8'), config.admin_username.encode('utf-8'))
+    env_password_ok = secrets.compare_digest(credentials.password.encode('utf-8'), config.admin_password.encode('utf-8'))
     if env_username_ok and env_password_ok:
         if request.url.path == '/admin':
             users.add_login_log(
@@ -206,9 +262,13 @@ class UserActiveRequest(BaseModel):
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    await telegram.start()
     await watcher.start()
-    yield
-    await watcher.stop()
+    try:
+        yield
+    finally:
+        await watcher.stop()
+        await telegram.stop()
 
 
 app = FastAPI(title='PereHomeLab', lifespan=lifespan)
@@ -254,6 +314,8 @@ async def monitor_area(area_slug: str) -> FileResponse:
     reserved = {'api', 'admin', 'monitor', 'static', 'sound', 'ws', 'healthz'}
     if area_slug in reserved:
         raise HTTPException(status_code=404, detail='Not found')
+    if not any(city.slug == area_slug or city.area_id == area_slug for city in cities.list()):
+        raise HTTPException(status_code=404, detail='Регион не найден')
     return FileResponse(PROJECT_ROOT / 'static' / 'index.html')
 
 
@@ -433,27 +495,140 @@ async def press_history(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=100, ge=1, le=100),
     area_id: str | None = Query(default=None),
+    q: str = Query(default='', max_length=200),
+    state: str = Query(default='', pattern='^(|accepted|waiting)$'),
+    date_from: str = Query(default='', pattern=r'^(|\d{4}-\d{2}-\d{2})$'),
+    date_to: str = Query(default='', pattern=r'^(|\d{4}-\d{2}-\d{2})$'),
 ) -> dict:
-    payload = history.page(page, page_size, area_id=area_id or None)
+    try:
+        for value in (date_from, date_to):
+            if value:
+                datetime.fromisoformat(value)
+        payload = history.page(page, page_size, area_id=area_id or None, query=q, state=state, date_from=date_from, date_to=date_to)
+    except ValueError:
+        raise HTTPException(400, 'Некорректная дата') from None
     city_settings = {
         city.area_id: city
         for city in cities.list(watcher.area_counts(), include_disabled=True, active_button_counts=watcher.active_area_counts())
     }
-    for item in payload.get('items', []):
+    payload['items'] = telegram.calls.decorate_many(payload.get('items', []))
+    for item in payload['items']:
         city = city_settings.get(item.get('area_id') or '')
         item['ack_button_text'] = city.ack_button_text if city else None
     return payload
 
 
+@app.get('/api/history/{event_id}')
+async def press_details(event_id: str) -> dict:
+    item = telegram.calls.details(event_id, include_actions=False)
+    if not item:
+        raise HTTPException(404, 'Вызов не найден')
+    return {'item': call_event(item)}
+
+
 @app.post('/api/acknowledge')
 async def acknowledge(request: AcknowledgeRequest) -> dict:
-    acknowledged_at = datetime.now()
-    count = history.acknowledge(
-        request.ids,
-        acknowledged_at.isoformat(timespec='seconds'),
-        acknowledged_at.strftime('%Y-%m-%d %H:%M:%S'),
-    )
-    return {'updated': count}
+    items = await telegram.acknowledge(request.ids)
+    current = telegram.calls.get_many(request.ids)
+    return {'updated': len(items), 'events': call_events(current)}
+
+
+@app.post('/api/alerts/state')
+async def alerts_state(request: AcknowledgeRequest) -> dict:
+    items = telegram.calls.get_many(request.ids)
+    changed = [item for item in items if item['revision'] > request.revisions.get(item['id'], -1)]
+    events = call_events(changed)
+    return {'acknowledged_ids': [item['id'] for item in items if item and item['sound_silenced']],
+            'events': events,
+            'released_events': [item for item in events if item['last_released_at'] and not item['sound_silenced']]}
+
+
+@app.get('/api/admin/employees')
+async def admin_employees(q: str = Query(default='', max_length=150), page: int = Query(default=1, ge=1),
+                          _: dict = Depends(require_admin)) -> dict:
+    return telegram.employees.page(q, page)
+
+
+@app.post('/api/admin/employees')
+async def admin_employee_create(request: EmployeeCreateRequest, admin: dict = Depends(require_admin)) -> dict:
+    try:
+        item = telegram.employees.create(request.login, request.full_name, request.telegram_user_id, admin['username'])
+        if item['telegram_user_id']:
+            telegram.seen_users.pop(item['telegram_user_id'], None)
+            await broadcast_call_change(telegram.calls.refresh_profile([item['telegram_user_id']]), 'profile')
+        return {'item': item}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+
+
+@app.put('/api/admin/employees/{employee_id}')
+async def admin_employee_update(employee_id: str, request: EmployeeUpdateRequest, admin: dict = Depends(require_admin)) -> dict:
+    try:
+        previous = telegram.employees.get(employee_id)
+        item = telegram.employees.update(employee_id, request.login, request.full_name, request.blocked,
+            request.allowed_areas, request.telegram_user_id, admin['username'], request.profile_locked)
+        changes = telegram.calls.refresh_profile([previous['telegram_user_id'], item['telegram_user_id']])
+        for user_id in [previous['telegram_user_id'], item['telegram_user_id']]:
+            if user_id:
+                telegram.seen_users.pop(user_id, None)
+        await broadcast_call_change(changes, 'profile')
+        return {'item': item}
+    except KeyError:
+        raise HTTPException(404, 'Сотрудник не найден') from None
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+
+
+@app.get('/api/admin/employees/{employee_id}/audit')
+async def admin_employee_audit(employee_id: str, _: dict = Depends(require_admin)) -> dict:
+    return {'items': telegram.employees.audit(employee_id)}
+
+
+@app.get('/api/admin/telegram')
+async def admin_telegram(_: dict = Depends(require_admin)) -> dict:
+    return telegram.public_settings()
+
+
+@app.post('/api/admin/telegram/{area_id}')
+async def admin_telegram_save(area_id: str, request: TelegramSettingsRequest, _: dict = Depends(require_admin)) -> dict:
+    try:
+        await telegram.configure(area_id, request.enabled, request.token)
+        telegram.store.set_policy(area_id, request.require_profile, request.allow_reassign_any)
+    except (ValueError, TelegramError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    return {'saved': True}
+
+
+@app.delete('/api/admin/telegram/{area_id}')
+async def admin_telegram_delete(area_id: str, _: dict = Depends(require_admin)) -> dict:
+    telegram.store.delete(area_id)
+    return {'deleted': True}
+
+
+@app.post('/api/admin/telegram/{area_id}/confirm-setup')
+async def admin_telegram_confirm(area_id: str, request: TelegramSetupRequest, _: dict = Depends(require_admin)) -> dict:
+    try:
+        telegram.store.confirm_setup(area_id, request.setup_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    return {'saved': True}
+
+
+@app.post('/api/admin/telegram/{area_id}/begin-setup')
+async def admin_telegram_begin(area_id: str, _: dict = Depends(require_admin)) -> dict:
+    try:
+        telegram.begin_setup(area_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    return {'started': True}
+
+
+@app.post('/api/admin/telegram/{area_id}/test')
+async def admin_telegram_test(area_id: str, _: dict = Depends(require_admin)) -> dict:
+    try:
+        return await telegram.test(area_id)
+    except (ValueError, TelegramError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
 
@@ -554,7 +729,18 @@ async def admin_login_logs(limit: int = Query(default=200, ge=1, le=500), _: dic
 async def admin_upload_sound(filename: str, request: Request, _: str = Depends(require_admin)) -> dict:
     safe_filename = safe_sound_filename(filename)
     target = PROJECT_ROOT / 'sound' / safe_filename
-    content = await request.body()
+    max_bytes = 20 * 1024 * 1024
+    try:
+        declared_size = int(request.headers.get('content-length', '0'))
+    except ValueError:
+        raise HTTPException(status_code=400, detail='Invalid content length') from None
+    if declared_size > max_bytes:
+        raise HTTPException(status_code=413, detail='Sound file must not exceed 20 MiB')
+    content = bytearray()
+    async for chunk in request.stream():
+        if len(content) + len(chunk) > max_bytes:
+            raise HTTPException(status_code=413, detail='Sound file must not exceed 20 MiB')
+        content.extend(chunk)
     if not content:
         raise HTTPException(status_code=400, detail='Empty sound file')
     target.write_bytes(content)

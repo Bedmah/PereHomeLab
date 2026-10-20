@@ -40,6 +40,9 @@ class AppConfig:
     app_download_dir: Path
     app_download_filename: str
     app_version: str
+    telegram_encryption_key: str | None = None
+    telegram_enabled: bool = True
+    telegram_event_ttl_seconds: float = 300
 
 
 def _required(name: str) -> str:
@@ -116,6 +119,7 @@ def load_config() -> AppConfig:
         history_overlap_seconds = float(os.getenv('HA_HISTORY_OVERLAP_SECONDS', '30'))
         healthcheck_seconds = float(os.getenv('HA_HEALTHCHECK_SECONDS', '30'))
         entity_refresh_seconds = float(os.getenv('HA_ENTITY_REFRESH_SECONDS', '900'))
+        telegram_ttl_seconds = float(os.getenv('TELEGRAM_EVENT_TTL_SECONDS', '300'))
     except ValueError as exc:
         raise ConfigError('Numeric settings have invalid values.') from exc
 
@@ -135,6 +139,8 @@ def load_config() -> AppConfig:
         raise ConfigError('HA_HEALTHCHECK_SECONDS must be at least 10.')
     if entity_refresh_seconds < 60:
         raise ConfigError('HA_ENTITY_REFRESH_SECONDS must be at least 60.')
+    if not 30 <= telegram_ttl_seconds <= 86400:
+        raise ConfigError('TELEGRAM_EVENT_TTL_SECONDS must be between 30 and 86400.')
 
     return AppConfig(
         ha_url=_required('HA_URL').rstrip('/'),
@@ -162,5 +168,8 @@ def load_config() -> AppConfig:
         admin_password=os.getenv('ADMIN_PASSWORD', 'admin').strip(),
         app_download_dir=_path('APP_DOWNLOAD_DIR', 'static/downloads'),
         app_download_filename=_filename('APP_DOWNLOAD_FILENAME', 'PereHomeLabKiosk.exe'),
-        app_version=os.getenv('APP_VERSION', '0.1.0').strip() or '0.1.0',
+        app_version=os.getenv('APP_VERSION', '0.1.1').strip() or '0.1.1',
+        telegram_encryption_key=_optional('TELEGRAM_ENCRYPTION_KEY'),
+        telegram_enabled=_bool('TELEGRAM_ENABLED', True),
+        telegram_event_ttl_seconds=telegram_ttl_seconds,
     )

@@ -10,5 +10,16 @@ __pycache__/
 *.sqlite
 *.sqlite3
 sound/*
-!sound/1.mp3
 !sound/.gitkeep
+.env
+*.env
+*.env.*
+!secret.env.example
+static/downloads/*
+!static/downloads/.gitkeep
+*.db-*
+*.sqlite-wal
+*.sqlite-shm
+*.bak
+*.key
+*.pem

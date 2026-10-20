@@ -5,9 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Переговорки</title>
     <link rel="icon" type="image/png" href="/static/assets/yadro-logo.png" />
-    <link rel="stylesheet" href="/static/styles.css?v=88" />
+    <link rel="stylesheet" href="/static/styles.css?v=0.1.1" />
+    <link rel="stylesheet" href="/static/calls.css?v=0.1.1-8" />
   </head>
-  <body>
+  <body class="monitor-page">
     <main class="screen">
       <header class="top-nav">
         <a class="brand" href="/" aria-label="YADRO — на главную">
@@ -72,6 +73,12 @@
             </div>
           </div>
           <div id="historyList" class="history-list"></div>
+          <details class="history-filters"><summary>Поиск в истории</summary><div>
+            <input id="historyQuery" type="search" placeholder="Кнопка, сотрудник, комментарий" aria-label="Поиск в истории">
+            <select id="historyState" aria-label="Статус вызова"><option value="">Все статусы</option><option value="waiting">Ожидает</option><option value="accepted">Принят</option></select>
+            <input id="historyFrom" type="date" aria-label="С даты"><input id="historyTo" type="date" aria-label="По дату">
+            <button id="historyFilterButton" class="mini-button" type="button">Найти</button>
+          </div></details>
         </section>
       </section>
     </main>
@@ -112,21 +119,27 @@
       </div>
     </section>
 
-    <section id="detailsModal" class="details-modal hidden">
-      <div class="details-card">
+    <section id="detailsModal" class="details-modal hidden" role="dialog" aria-modal="true" aria-labelledby="detailsName">
+      <div class="details-card call-details-card">
         <button id="detailsCloseButton" class="details-close" type="button" aria-label="Закрыть">×</button>
-        <span class="section-label">Детали</span>
+        <span id="detailsArea" class="section-label">Переговорка</span>
         <h2 id="detailsName">Переговорка</h2>
         <dl class="details-grid">
           <div>
             <dt>Нажата</dt>
             <dd id="detailsPressedAt">—</dd>
           </div>
-          <div>
-            <dt id="detailsAckLabel">...</dt>
-            <dd id="detailsAcknowledgedAt">—</dd>
-          </div>
         </dl>
+        <section id="callAssignment" class="call-assignment" aria-live="polite" aria-label="Текущий ответственный">
+          <span id="assignmentLabel" class="assignment-label">Ответственный</span>
+          <strong id="assignmentName" class="assignment-name">Загрузка…</strong>
+          <span id="assignmentPlatform" class="assignment-platform" hidden></span>
+          <time id="assignmentTime" class="assignment-time" hidden></time>
+        </section>
+        <section class="call-comments" aria-labelledby="commentsHeading">
+          <div class="comments-heading"><h3 id="commentsHeading">Комментарии</h3><span id="commentsCount" class="comments-count">0</span></div>
+          <div id="callComments" class="comments-list" aria-live="polite"></div>
+        </section>
       </div>
     </section>
 
@@ -194,6 +207,7 @@
     </section>
 
     <audio id="alertAudio" preload="auto"></audio>
-    <script src="/static/app.js?v=87"></script>
+    <script src="/static/app.js?v=0.1.1-8"></script>
+    <script src="/static/history-filters.js?v=0.1.1"></script>
   </body>
 </html>

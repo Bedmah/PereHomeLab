@@ -45,8 +45,14 @@ const detailsModal = document.querySelector("#detailsModal");
 const detailsCloseButton = document.querySelector("#detailsCloseButton");
 const detailsName = document.querySelector("#detailsName");
 const detailsPressedAt = document.querySelector("#detailsPressedAt");
-const detailsAckLabel = document.querySelector("#detailsAckLabel");
-const detailsAcknowledgedAt = document.querySelector("#detailsAcknowledgedAt");
+const detailsArea = document.querySelector("#detailsArea");
+const callComments = document.querySelector("#callComments");
+const commentsCount = document.querySelector("#commentsCount");
+const callAssignment = document.querySelector('#callAssignment');
+const assignmentLabel = document.querySelector('#assignmentLabel');
+const assignmentName = document.querySelector('#assignmentName');
+const assignmentPlatform = document.querySelector('#assignmentPlatform');
+const assignmentTime = document.querySelector('#assignmentTime');
 const batteryModal = document.querySelector("#batteryModal");
 const batteryCloseButton = document.querySelector("#batteryCloseButton");
 const batteryDetailsName = document.querySelector("#batteryDetailsName");
@@ -60,6 +66,8 @@ const batteryDetailsButtonEntity = document.querySelector("#batteryDetailsButton
 const batteryDetailsRaw = document.querySelector("#batteryDetailsRaw");
 
 let activeAlerts = [];
+let soundAlertId = null;
+const acknowledgedAlertIds = new Set();
 let soundEnabled = false;
 let reconnectTimer = null;
 let historyPage = 1;
@@ -88,6 +96,17 @@ const historyPageSize = 100;
 const freshHighlightMs = 5 * 60 * 1000;
 const defaultVolumePercent = 100;
 const volumeStorageKey = "perehomelab-alert-volume-v2";
+const audioCacheVersion = String(Date.now());
+let audioProbePromise = null;
+let audioGeneration = 0;
+let audioFailure = '';
+let historyInFlight = null;
+let historyRefreshTimer = null;
+let historyRenderSignature = '';
+let alertSyncInFlight = false;
+let detailsRequest = null;
+let detailsRenderSignature = '';
+let clientConfigReady = false;
 
 const pathAreaSlug = decodeURIComponent(window.location.pathname.replace(/^\/+|\/+$/g, ""));
 if (pathAreaSlug && !["monitor", "admin"].includes(pathAreaSlug)) {
@@ -244,7 +263,7 @@ function appendSystemRow(label, state, value, detail = "") {
 
 function renderSystemStatus() {
   updateTopSystemStatus();
-  if (!latestSystemStatus) return;
+  if (!latestSystemStatus || systemStatusModal.classList.contains('hidden')) return;
 
   const system = latestSystemStatus;
   const visibleOverall = browserSocketConnected ? system.overall : "error";
@@ -349,10 +368,15 @@ function renderSystemStatus() {
 
 async function loadSystemStatus() {
   try {
+    if (!clientConfigReady) {
+      await loadClientConfig();
+      await unlockSound();
+    }
     const response = await fetch("/api/system-status", { cache: "no-store" });
     if (!response.ok) throw new Error("status unavailable");
     latestSystemStatus = await response.json();
     renderSystemStatus();
+    await syncActiveAlerts();
   } catch {
     updateTopSystemStatus();
   }
@@ -403,7 +427,8 @@ function shortHaError(value) {
 }
 
 function loadSavedVolume() {
-  const rawValue = localStorage.getItem(volumeStorageKey);
+  let rawValue;
+  try { rawValue = localStorage.getItem(volumeStorageKey); } catch { return defaultVolumePercent; }
   if (rawValue === null || rawValue.trim() === "") {
     return defaultVolumePercent;
   }
@@ -426,7 +451,7 @@ function applyVolume(percent, save = true) {
   volumeValue.textContent = `${cleanPercent}%`;
   volumeBadge.textContent = `${cleanPercent}%`;
   if (save) {
-    localStorage.setItem(volumeStorageKey, String(cleanPercent));
+    try { localStorage.setItem(volumeStorageKey, String(cleanPercent)); } catch {}
   }
 }
 
@@ -449,37 +474,72 @@ async function loadClientConfig() {
   }
   ackButtonText = config.ack_button_text || "ФА";
   clearPopupButton.textContent = ackButtonText;
-  detailsAckLabel.textContent = ackButtonText;
   soundPlaySeconds = Number(config.sound_play_seconds) > 0 ? Number(config.sound_play_seconds) : 25;
   syncHistoryHours = Number(config.sync_history_hours) >= 0 ? Number(config.sync_history_hours) : 24;
+  clientConfigReady = true;
 }
 
 function setSoundEnabled(enabled) {
   soundEnabled = enabled;
   enableSoundButton.textContent = enabled ? "Звук включён" : "Включить звук";
   enableSoundButton.classList.toggle("enabled", enabled);
+  enableSoundButton.classList.toggle('blocked', !enabled);
+  enableSoundButton.setAttribute('aria-label', enabled ? 'Звук уведомлений включён' : 'Разрешить звук уведомлений');
 }
 
-async function unlockSound() {
-  if (!alertAudio.src) {
-    return false;
-  }
+function silentAudioUrl() {
+  const buffer = new ArrayBuffer(1644);
+  const view = new DataView(buffer);
+  const write = (offset, value) => [...value].forEach((char, index) => view.setUint8(offset + index, char.charCodeAt(0)));
+  write(0, 'RIFF'); view.setUint32(4, 1636, true); write(8, 'WAVEfmt ');
+  view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, 8000, true); view.setUint32(28, 16000, true);
+  view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  write(36, 'data'); view.setUint32(40, 1600, true);
+  return URL.createObjectURL(new Blob([buffer], {type: 'audio/wav'}));
+}
 
-  try {
-    applyVolume(volumeSlider.value, false);
-    await alertAudio.play();
-    alertAudio.pause();
-    alertAudio.currentTime = 0;
-    setSoundEnabled(true);
-    return true;
-  } catch {
-    setSoundEnabled(false);
-    enableSoundButton.textContent = "Нажмите для звука";
-    return false;
-  }
+function unlockSound() {
+  if (!clientConfigReady) return Promise.resolve(false);
+  if (audioProbePromise) return audioProbePromise;
+  if (soundLoopActive || volumeTestButton.disabled || !alertAudio.paused) return Promise.resolve(soundEnabled);
+  const source = alertAudio.getAttribute('src');
+  const probe = silentAudioUrl();
+  alertAudio.src = probe;
+  alertAudio.volume = 1;
+  audioProbePromise = (async () => {
+    try {
+      await alertAudio.play();
+      audioFailure = '';
+      setSoundEnabled(true);
+      return true;
+    } catch (error) {
+      audioFailure = error.name === 'NotAllowedError' ? 'blocked' : 'error';
+      setSoundEnabled(false);
+      enableSoundButton.textContent = audioFailure === 'blocked' ? 'Разрешить звук' : 'Проверить звук';
+      enableSoundButton.title = audioFailure === 'blocked' ? 'Браузер ожидает нажатия на страницу для разрешения звука' : 'Не удалось подготовить звук';
+      return false;
+    } finally {
+      alertAudio.pause();
+      alertAudio.currentTime = 0;
+      if (source) alertAudio.src = source;
+      else alertAudio.removeAttribute('src');
+      applyVolume(volumeSlider.value, false);
+      URL.revokeObjectURL(probe);
+      audioProbePromise = null;
+    }
+  })();
+  return audioProbePromise;
 }
 
 async function testCurrentVolume() {
+  if (audioProbePromise) await audioProbePromise;
+  if (activeAlerts.length) {
+    if (!soundEnabled) await unlockSound();
+    if (soundEnabled && !soundLoopActive) playAlertSound(activeAlerts[0]);
+    return;
+  }
+  stopAlertSound();
   const testSoundUrl = soundUrlForCurrentArea();
   if (testSoundUrl) {
     alertAudio.src = testSoundUrl;
@@ -492,16 +552,16 @@ async function testCurrentVolume() {
     return;
   }
 
-  stopAlertSound();
   applyVolume(volumeSlider.value, false);
+  const generation = audioGeneration;
   volumeTestButton.disabled = true;
   volumeTestButton.textContent = "Играет...";
   try {
     alertAudio.currentTime = 0;
     await alertAudio.play();
-    setSoundEnabled(true);
-  } catch {
-    setSoundEnabled(false);
+    if (generation === audioGeneration) setSoundEnabled(true);
+  } catch (error) {
+    if (generation === audioGeneration && error.name !== 'AbortError') setSoundEnabled(false);
     volumeTestButton.textContent = "Нажмите ещё раз";
   } finally {
     setTimeout(() => {
@@ -573,7 +633,18 @@ function handleServerMessage(payload) {
     addAlerts(payload.events);
   }
   if (payload.type === "history_sync") {
-    loadHistory();
+    scheduleHistoryRefresh();
+  }
+  if (payload.type === "acknowledged") {
+    applyCallChanges(payload.events || []);
+    scheduleHistoryRefresh();
+  }
+  if (payload.type === "call_updated") {
+    applyCallChanges(payload.events || []);
+    scheduleHistoryRefresh();
+  }
+  if (payload.type === "state") {
+    syncActiveAlerts();
   }
 }
 
@@ -592,6 +663,8 @@ async function loadAreas() {
     const area = areaItems.find((item) => item.slug === selectedAreaSlug || item.area_id === selectedAreaSlug);
     if (area) {
       selectedAreaId = area.area_id;
+    } else {
+      selectedAreaId = "__unknown_region__";
     }
   }
   renderCityTabs();
@@ -645,15 +718,39 @@ function updateHistorySummary() {
 }
 
 async function loadHistory() {
-  const response = await fetch(areaUrl("/api/history", { page: historyPage, page_size: historyPageSize }));
-  if (!response.ok) {
-    throw new Error("Не удалось загрузить историю");
-  }
-  const payload = await response.json();
-  renderHistory(payload.items || []);
-  historyPage = payload.page || 1;
-  totalHistoryPages = payload.total_pages || 1;
-  updatePager();
+  const url = areaUrl("/api/history", { page: historyPage, page_size: historyPageSize,
+    q: document.querySelector('#historyQuery')?.value || '', state: document.querySelector('#historyState')?.value || '',
+    date_from: document.querySelector('#historyFrom')?.value || '', date_to: document.querySelector('#historyTo')?.value || '' });
+  if (historyInFlight?.url === url) return historyInFlight.promise;
+  historyInFlight?.controller.abort();
+  const request = {url, controller: new AbortController()};
+  historyInFlight = request;
+  request.promise = (async () => {
+    try {
+      const response = await fetch(url, {signal: request.controller.signal});
+      if (!response.ok) throw new Error('Не удалось загрузить историю');
+      const payload = await response.json();
+      if (historyInFlight !== request) return;
+      renderHistory(payload.items || []);
+      historyPage = payload.page || 1;
+      totalHistoryPages = payload.total_pages || 1;
+      updatePager();
+    } catch (error) {
+      if (error.name !== 'AbortError') throw error;
+    } finally {
+      if (historyInFlight === request) historyInFlight = null;
+    }
+  })();
+  return request.promise;
+}
+
+function scheduleHistoryRefresh() {
+  if (historyRefreshTimer) return;
+  historyRefreshTimer = setTimeout(async () => {
+    historyRefreshTimer = null;
+    if (historyInFlight) await historyInFlight.promise.catch(() => {});
+    loadHistory().catch(() => {});
+  }, 150);
 }
 
 async function loadBatteries() {
@@ -906,18 +1003,39 @@ function closeBatteryDetails() {
   batteryModal.classList.add("hidden");
 }
 
+const callRevisions = new Map();
+let detailsEventId = null;
+
+function applyCallChanges(events) {
+  const silenced = new Set();
+  for (const event of events) {
+    if ((callRevisions.get(event.id) ?? -1) >= (event.revision || 0)) continue;
+    callRevisions.set(event.id, event.revision || 0);
+    if (event.sound_silenced) silenced.add(event.id);
+    if (detailsEventId === event.id && !detailsModal.classList.contains('hidden')) {
+      renderAssignment(event);
+      openDetails(event);
+    }
+  }
+  if (silenced.size) removeAcknowledgedAlerts([...silenced]);
+  while (callRevisions.size > 2000) callRevisions.delete(callRevisions.keys().next().value);
+}
+
 function addAlerts(events) {
-  const visibleEvents = events.filter((event) => !selectedAreaId || event.area_id === selectedAreaId);
+  const existingIds = new Set(activeAlerts.map((event) => event.id));
+  const visibleEvents = events.filter((event) => (!selectedAreaId || event.area_id === selectedAreaId)
+    && !existingIds.has(event.id) && !acknowledgedAlertIds.has(event.id));
   if (!visibleEvents.length) {
-    loadHistory();
-    loadBatteries();
     return;
   }
   activeAlerts = [...activeAlerts, ...visibleEvents];
+  visibleEvents.forEach((event) => callRevisions.set(event.id, event.revision || 0));
   renderPopup();
   showPopup();
-  playAlertSound(visibleEvents[0]);
-  loadHistory();
+  if (!soundLoopActive) {
+    playAlertSound(visibleEvents[0]);
+  }
+  scheduleHistoryRefresh();
 }
 
 function ackTextForActiveAlerts() {
@@ -1009,12 +1127,17 @@ function soundUrlFromPath(soundPath) {
     return null;
   }
   const url = new URL(rawUrl, window.location.origin);
-  url.searchParams.set("audio_v", String(Date.now()));
+  url.searchParams.set("audio_v", audioCacheVersion);
   return `${url.pathname}${url.search}`;
 }
 
 function renderHistory(items) {
+  const signature = JSON.stringify([selectedAreaId, items.map((item) => [item.id, item.device_name, item.area_name,
+    item.pressed_at_display, isFresh(item.pressed_at), item.call_state, item.assignee_short, item.assignee_name])]);
+  if (signature === historyRenderSignature) return;
+  historyRenderSignature = signature;
   historyList.innerHTML = "";
+  const fragment = document.createDocumentFragment();
 
   if (!items.length) {
     const empty = document.createElement("div");
@@ -1043,12 +1166,19 @@ function renderHistory(items) {
 
     const time = document.createElement("div");
     time.className = "time";
-    time.textContent = `Нажата: ${item.pressed_at_display}`;
+    time.textContent = `Нажата: ${item.pressed_at_display || '—'}`;
 
     if (area) {
       left.append(area);
     }
     left.append(name, time);
+    if (item.call_state === 'accepted') {
+      const assignee = document.createElement('div');
+      assignee.className = 'history-assignee';
+      assignee.textContent = 'Пошёл: ' + (item.assignee_short || item.assignee_name || 'Сотрудник');
+      assignee.title = assignee.textContent;
+      left.append(assignee);
+    }
     row.append(left);
     row.tabIndex = 0;
     row.addEventListener("click", () => openDetails(item));
@@ -1058,19 +1188,102 @@ function renderHistory(items) {
         openDetails(item);
       }
     });
-    historyList.appendChild(row);
+    fragment.appendChild(row);
   });
+  historyList.appendChild(fragment);
 }
 
-function openDetails(item) {
-  detailsName.textContent = displayDeviceName(item);
-  detailsPressedAt.textContent = item.pressed_at_display || "—";
-  detailsAckLabel.textContent = item.ack_button_text || ackButtonText;
-  detailsAcknowledgedAt.textContent = item.acknowledged_at_display || "Не подтверждено";
+async function openDetails(item) {
+  const changed = detailsEventId !== item.id;
+  detailsEventId = item.id;
+  if (changed || item.device_name) detailsName.textContent = displayDeviceName(item) || 'Переговорка';
+  if (changed || item.pressed_at_display) detailsPressedAt.textContent = item.pressed_at_display || '—';
+  if (changed || item.area_name) detailsArea.textContent = item.area_name || selectedAreaName();
   detailsModal.classList.remove("hidden");
+  detailsRequest?.abort();
+  const controller = new AbortController();
+  detailsRequest = controller;
+  if (changed) {
+    callAssignment.classList.remove('accepted');
+    assignmentLabel.textContent = 'Ответственный';
+    assignmentName.textContent = 'Проверяем статус…';
+    assignmentPlatform.hidden = true;
+    assignmentTime.hidden = true;
+    detailsRenderSignature = '';
+    commentsCount.textContent = '0';
+    callComments.textContent = 'Загрузка комментариев…';
+  }
+  try {
+    const response = await fetch(`/api/history/${encodeURIComponent(item.id)}`, {cache: 'no-store', signal: controller.signal});
+    if (!response.ok) throw new Error('Не удалось загрузить комментарии');
+    const payload = (await response.json()).item;
+    if (detailsRequest !== controller || detailsEventId !== item.id) return;
+    renderAssignment(payload);
+    renderComments(payload.comments || []);
+  } catch (error) {
+    if (detailsRequest === controller && error.name !== 'AbortError') {
+      callComments.textContent = error.message;
+      assignmentName.textContent = 'Статус временно недоступен';
+      assignmentPlatform.hidden = true;
+      assignmentTime.hidden = true;
+      callAssignment.classList.remove('accepted');
+    }
+  } finally {
+    if (detailsRequest === controller) detailsRequest = null;
+  }
+}
+
+function renderAssignment(item) {
+  const accepted = item.call_state === 'accepted';
+  callAssignment.classList.toggle('accepted', accepted);
+  assignmentLabel.textContent = accepted ? 'Пошёл' : 'Статус';
+  assignmentName.textContent = accepted ? (item.assignee_details || item.assignee_name || item.acknowledged_by || 'Сотрудник') : 'Ожидает сотрудника';
+  const platform = item.assignee_source_label || item.assignee_source || item.acknowledged_source;
+  assignmentPlatform.textContent = platform || '';
+  assignmentPlatform.hidden = !accepted || !platform;
+  assignmentTime.textContent = item.acknowledged_at_display || '';
+  assignmentTime.dateTime = item.acknowledged_at || '';
+  assignmentTime.hidden = !accepted || !item.acknowledged_at_display;
+}
+
+function renderComments(comments) {
+  const signature = JSON.stringify(comments);
+  if (signature === detailsRenderSignature) return;
+  detailsRenderSignature = signature;
+  commentsCount.textContent = String(comments.length);
+  const fragment = document.createDocumentFragment();
+  if (!comments.length) {
+    const empty = document.createElement('p');
+    empty.className = 'comments-empty';
+    empty.textContent = 'Комментариев пока нет';
+    fragment.append(empty);
+  }
+  for (const comment of comments) {
+    const card = document.createElement('article');
+    card.className = 'comment-card';
+    const header = document.createElement('div');
+    header.className = 'comment-header';
+    const author = document.createElement('strong');
+    author.textContent = comment.author_name || 'Сотрудник';
+    const time = document.createElement('time');
+    time.textContent = comment.created_at_display || '';
+    if (comment.created_at) time.dateTime = comment.created_at;
+    const body = document.createElement('p');
+    body.className = 'comment-body';
+    body.textContent = comment.body;
+    header.append(author, time);
+    card.append(header, body);
+    fragment.append(card);
+  }
+  const scroll = callComments.scrollTop;
+  callComments.replaceChildren(fragment);
+  callComments.scrollTop = scroll;
 }
 
 function closeDetails() {
+  detailsEventId = null;
+  detailsRequest?.abort();
+  detailsRequest = null;
   detailsModal.classList.add("hidden");
 }
 
@@ -1104,7 +1317,7 @@ function createPressRow(alert) {
 
   const time = document.createElement("div");
   time.className = "time";
-  time.textContent = `Нажата: ${alert.pressed_at_display}`;
+  time.textContent = `Нажата: ${alert.pressed_at_display || '—'}`;
 
   if (area) {
     left.append(area);
@@ -1118,34 +1331,73 @@ function showPopup() {
   popup.classList.remove("hidden");
 }
 
-function clearAlerts() {
-  stopAlertSound();
-  acknowledgeActiveAlerts();
-  activeAlerts = [];
-  renderPopup();
-  popup.classList.add("hidden");
-  clearPopupButton.textContent = ackButtonText;
-}
-
-async function acknowledgeActiveAlerts() {
+async function clearAlerts() {
   const ids = activeAlerts.map((item) => item.id).filter(Boolean);
-  if (!ids.length) {
+  if (!ids.length || clearPopupButton.disabled) {
     return;
   }
-
+  clearPopupButton.disabled = true;
+  stopAlertSound();
   try {
-    await fetch("/api/acknowledge", {
+    const response = await fetch("/api/acknowledge", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids }),
     });
+    if (!response.ok) throw new Error("Не удалось подтвердить вызов");
+    applyCallChanges((await response.json()).events || [], true);
     await loadHistory();
   } catch {
-    // История обновится следующим автообновлением.
+    clearPopupButton.title = "Не удалось сохранить подтверждение. Нажмите ещё раз";
+    if (activeAlerts.length && !soundLoopActive) playAlertSound(activeAlerts[0]);
+  } finally {
+    clearPopupButton.disabled = false;
+    if (activeAlerts.length && !soundLoopActive) playAlertSound(activeAlerts[0]);
   }
 }
 
+function removeAcknowledgedAlerts(ids) {
+  ids.forEach((id) => acknowledgedAlertIds.add(id));
+  while (acknowledgedAlertIds.size > 2000) {
+    acknowledgedAlertIds.delete(acknowledgedAlertIds.values().next().value);
+  }
+  const removedSound = ids.includes(soundAlertId);
+  const remaining = activeAlerts.filter((event) => !acknowledgedAlertIds.has(event.id));
+  if (remaining.length === activeAlerts.length) return;
+  activeAlerts = remaining;
+  renderPopup();
+  if (!activeAlerts.length) {
+    stopAlertSound();
+    popup.classList.add("hidden");
+  } else if (removedSound) {
+    stopAlertSound();
+    playAlertSound(activeAlerts[0]);
+  }
+}
+
+async function syncActiveAlerts() {
+  if (alertSyncInFlight) return;
+  const ids = [...new Set([...activeAlerts.map((event) => event.id), ...[...acknowledgedAlertIds].slice(-500),
+    ...(detailsEventId ? [detailsEventId] : [])])];
+  if (!ids.length) return;
+  alertSyncInFlight = true;
+  try {
+    const response = await fetch("/api/alerts/state", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids, revisions: Object.fromEntries(ids.map((id) => [id, callRevisions.get(id) ?? -1])) }),
+    });
+    if (response.ok) {
+      const payload = await response.json();
+      applyCallChanges(payload.released_events || []);
+      applyCallChanges(payload.events || []);
+    }
+  } catch {} finally { alertSyncInFlight = false; }
+}
+
 function stopAlertSound() {
+  audioGeneration += 1;
+  soundAlertId = null;
   soundLoopActive = false;
   soundRepeatRemaining = null;
   if (soundStopTimer) {
@@ -1169,11 +1421,15 @@ async function startSoundLoop() {
     soundRepeatRemaining -= 1;
   }
 
+  const generation = audioGeneration;
   try {
     alertAudio.currentTime = 0;
     await alertAudio.play();
-  } catch {
+  } catch (error) {
+    if (generation !== audioGeneration || error.name === 'AbortError') return;
+    audioFailure = error.name === 'NotAllowedError' ? 'blocked' : 'error';
     setSoundEnabled(false);
+    enableSoundButton.textContent = audioFailure === 'blocked' ? 'Разрешить звук' : 'Ошибка звука';
     stopAlertSound();
   }
 }
@@ -1191,7 +1447,14 @@ function soundConfigForEvent(event) {
 }
 
 async function playAlertSound(event) {
+  const generation = audioGeneration;
+  if (audioProbePromise) {
+    await audioProbePromise;
+    if (generation !== audioGeneration) return;
+  }
   const config = soundConfigForEvent(event);
+  if (!soundEnabled || !config.url) return;
+  stopAlertSound();
   if (config.url && alertAudio.src !== new URL(config.url, window.location.origin).href) {
     alertAudio.src = config.url;
   }
@@ -1199,8 +1462,8 @@ async function playAlertSound(event) {
     return;
   }
 
-  stopAlertSound();
   soundLoopActive = true;
+  soundAlertId = event?.id || null;
   if (config.mode === "count") {
     soundRepeatRemaining = config.count;
   } else {
@@ -1214,7 +1477,18 @@ alertAudio.addEventListener("ended", startSoundLoop);
 
 enableSoundButton.addEventListener("click", async () => {
   await unlockSound();
+  if (soundEnabled && activeAlerts.length && !soundLoopActive) playAlertSound(activeAlerts[0]);
 });
+
+function unlockOnInteraction(event) {
+  if (!event.isTrusted || soundEnabled || event.target.closest('#clearPopupButton, #volumeTestButton')) return;
+  if (event.type === 'keydown' && (event.ctrlKey || event.altKey || event.metaKey)) return;
+  unlockSound().then(() => {
+    if (soundEnabled && activeAlerts.length && !soundLoopActive) playAlertSound(activeAlerts[0]);
+  });
+}
+document.addEventListener('pointerup', unlockOnInteraction, {passive: true});
+document.addEventListener('keydown', unlockOnInteraction);
 volumeSlider.addEventListener("input", () => {
   applyVolume(volumeSlider.value);
 });
@@ -1231,6 +1505,7 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     setVolumePanelOpen(false);
     closeSystemStatus();
+    closeDetails();
   }
 });
 document.addEventListener("click", (event) => {
@@ -1282,29 +1557,35 @@ applyVolume(loadSavedVolume(), false);
 
 async function initializePage() {
   await loadClientConfig();
+  const audioReady = unlockSound();
   await loadAreas();
-  await Promise.all([loadHistory(), loadBatteries(), loadSystemStatus()]);
-  setSoundEnabled(true);
+  await Promise.all([loadHistory(), loadBatteries(), loadSystemStatus(), audioReady]);
 }
 
-initializePage().finally(() => {
+initializePage().catch(() => { statusMeta.textContent = 'Не удалось загрузить часть данных. Повторите обновление'; }).finally(() => {
   connectWebSocket();
   if (new URLSearchParams(window.location.search).get("system_status") === "open") {
     setTimeout(openSystemStatus, 500);
   }
 });
-setInterval(loadHistory, 30_000);
+setInterval(() => loadHistory().catch(() => {}), 30_000);
 setInterval(loadBatteries, 60_000);
 setInterval(loadSystemStatus, 15_000);
 
 requestAnimationFrame(() => document.body.classList.add("ui-ready"));
 
+let pressedTarget = null;
+function releasePressedTarget() {
+  pressedTarget?.classList.remove('ui-pressed');
+  pressedTarget = null;
+}
 document.addEventListener("pointerdown", (event) => {
+  releasePressedTarget();
   const target = event.target.closest("button, a, .battery-item, .history-item");
   if (!target || target.matches(":disabled")) return;
   target.classList.add("ui-pressed");
-  const release = () => target.classList.remove("ui-pressed");
-  target.addEventListener("pointerup", release, { once: true });
-  target.addEventListener("pointercancel", release, { once: true });
-  target.addEventListener("pointerleave", release, { once: true });
+  pressedTarget = target;
 });
+document.addEventListener('pointerup', releasePressedTarget);
+document.addEventListener('pointercancel', releasePressedTarget);
+window.addEventListener('blur', releasePressedTarget);

@@ -85,10 +85,11 @@ class UserStore:
                     UPDATE admin_users
                     SET role = 'owner',
                         is_active = 1,
+                        password_hash = ?,
                         updated_at = ?
                     WHERE username = ?
                     ''',
-                    (now, clean_username),
+                    (self.hash_password(password), now, clean_username),
                 )
                 return
             connection.execute(

@@ -14,6 +14,7 @@ from app.cities import CityStore
 from app.config import AppConfig
 from app.ha_client import HomeAssistantClient
 from app.history import HistoryStore
+from app.dates import display_date
 
 
 @dataclass(frozen=True)
@@ -51,7 +52,7 @@ class PressEvent:
             'device_id': self.device_id,
             'device_name': self.device_name,
             'pressed_at': self.pressed_at,
-            'pressed_at_display': self.pressed_at_display,
+            'pressed_at_display': display_date(self.pressed_at),
             'area_id': self.area_id,
             'area_name': self.area_name,
             'sound_path': self.sound_path,
@@ -82,6 +83,7 @@ class HomeAssistantWatcher:
         self._history = history
         self._cities = cities
         self._logger = logger
+        self.on_press = None
         self._clients: set[WebSocket] = set()
         self._entities: dict[str, WatchedEntity] = {}
         self._areas: list[dict[str, str]] = []
@@ -957,6 +959,9 @@ class HomeAssistantWatcher:
         if not press_event:
             return
 
+        if self.on_press:
+            self.on_press(press_event.to_dict())
+
         await self._broadcast(
             {
                 'type': 'press',
@@ -982,16 +987,16 @@ class HomeAssistantWatcher:
     def _create_press_event(self, entity: WatchedEntity, ha_changed_at: datetime | None = None) -> PressEvent | None:
         local_tz = datetime.now().astimezone().tzinfo or ZoneInfo('Europe/Moscow')
         pressed_at = ha_changed_at.astimezone(local_tz).replace(tzinfo=None) if ha_changed_at else datetime.now()
-        if self._history.has_nearby_press(entity.entity_id, pressed_at, self._config.history_dedup_seconds):
-            self._logger.info('Duplicate HA press ignored for %s', entity.name)
+        existing = self._history.nearby_press(entity.entity_id, pressed_at, self._config.history_dedup_seconds)
+        if existing and (existing['live_notified'] or existing['acknowledged_at']):
             return None
 
         event = PressEvent(
-            id=uuid4().hex,
+            id=existing['id'] if existing else uuid4().hex,
             device_id=entity.entity_id,
             device_name=entity.name,
-            pressed_at=pressed_at.isoformat(timespec='seconds'),
-            pressed_at_display=pressed_at.strftime('%Y-%m-%d %H:%M:%S'),
+            pressed_at=existing['pressed_at'] if existing else pressed_at.isoformat(timespec='seconds'),
+            pressed_at_display=existing['pressed_at_display'] if existing else pressed_at.strftime('%Y-%m-%d %H:%M:%S'),
             area_id=entity.area_id,
             area_name=entity.area_name,
             sound_path=entity.sound_path,
@@ -1009,10 +1014,14 @@ class HomeAssistantWatcher:
             event.area_id,
             event.area_name,
         )
-        if added:
+        notified = self._history.mark_live_notified(event.id)
+        if notified:
             self.last_press_at = event.pressed_at
             self.last_press_name = event.device_name
-        return event if added else None
+        return event if notified else None
+
+    async def broadcast_acknowledged(self, items: list[dict]) -> None:
+        await self._broadcast({'type': 'acknowledged', 'events': items})
 
     async def _set_status(self, message: str) -> None:
         self.status_message = message
