@@ -1163,6 +1163,7 @@ function renderHistory(items) {
     const name = document.createElement("div");
     name.className = "name";
     name.textContent = displayDeviceName(item);
+    name.title = name.textContent;
 
     const time = document.createElement("div");
     time.className = "time";
@@ -1190,7 +1191,10 @@ function renderHistory(items) {
     });
     fragment.appendChild(row);
   });
-  historyList.appendChild(fragment);
+  const grid = document.createElement('div');
+  grid.className = 'history-grid';
+  grid.appendChild(fragment);
+  historyList.appendChild(grid);
 }
 
 async function openDetails(item) {

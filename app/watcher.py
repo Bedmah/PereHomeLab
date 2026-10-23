@@ -714,18 +714,7 @@ class HomeAssistantWatcher:
                     continue
 
                 current_value = str(row.get('state') or '').lower()
-                if previous_value is None:
-                    # HA обычно отдаёт перед началом периода строку-базу. Если
-                    # первой строкой уже является реальное новое `on` внутри
-                    # периода, не теряем его.
-                    is_transition = (
-                        self._config.ha_trigger_from is None
-                        and current_value == self._config.ha_trigger_to.lower()
-                        and period_start is not None
-                        and changed_at >= period_start
-                    )
-                else:
-                    is_transition = self._is_trigger(previous_value, current_value)
+                is_transition = previous_value is not None and self._is_trigger(previous_value, current_value)
                 previous_value = current_value
                 if not is_transition:
                     continue

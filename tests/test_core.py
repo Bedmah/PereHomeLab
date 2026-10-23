@@ -91,14 +91,24 @@ class WatcherTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.watcher._import_history_rows(rows, timezone.utc, start), 0)
         self.assertEqual(self.history.page(1, 10)['total'], 1)
 
-    def test_first_on_inside_period_is_not_lost(self):
+    def test_first_on_inside_period_without_previous_state_is_not_a_press(self):
         start = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
         rows = [[{
             'entity_id': self.entity.entity_id,
             'state': 'on',
             'last_changed': (start + timedelta(seconds=2)).isoformat(),
         }]]
+        self.assertEqual(self.watcher._import_history_rows(rows, timezone.utc, start), 0)
+
+    def test_new_device_starting_on_then_real_press_imports_only_real_transition(self):
+        start = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
+        rows = [[
+            {'entity_id': self.entity.entity_id, 'state': 'on', 'last_changed': (start + timedelta(seconds=2)).isoformat()},
+            {'state': 'off', 'last_changed': (start + timedelta(seconds=3)).isoformat()},
+            {'state': 'on', 'last_changed': (start + timedelta(seconds=10)).isoformat()},
+        ]]
         self.assertEqual(self.watcher._import_history_rows(rows, timezone.utc, start), 1)
+        self.assertEqual(self.history.page(1, 10)['items'][0]['pressed_at'], '2026-01-01T10:00:10')
 
     def test_old_on_baseline_is_not_counted_as_a_new_press(self):
         start = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
@@ -107,6 +117,46 @@ class WatcherTestCase(unittest.IsolatedAsyncioTestCase):
             'state': 'on',
             'last_changed': (start - timedelta(minutes=5)).isoformat(),
         }]]
+        self.assertEqual(self.watcher._import_history_rows(rows, timezone.utc, start), 0)
+
+    def test_on_baseline_at_exact_period_start_is_not_a_press(self):
+        start = datetime(2026, 10, 23, 8, 0, tzinfo=timezone.utc)
+        rows = [[{'entity_id': self.entity.entity_id, 'state': 'on',
+                  'last_changed': start.isoformat(), 'last_updated': start.isoformat()}]]
+        self.assertEqual(self.watcher._import_history_rows(rows, timezone.utc, start), 0)
+        self.assertEqual(self.history.page(1, 10)['total'], 0)
+
+    def test_repeated_sync_of_unchanged_on_does_not_create_history_in_any_region(self):
+        start = datetime(2026, 10, 23, 8, 0, tzinfo=timezone.utc)
+        self.watcher._entities = {
+            f'binary_sensor.{area}_button': WatchedEntity(f'binary_sensor.{area}_button', area, area, area)
+            for area in ('spb', 'msk', 'msk_alcon', 'dubna')
+        }
+        for index in range(5):
+            boundary = start + timedelta(minutes=5 * index)
+            rows = [[{'entity_id': entity_id, 'state': 'on', 'last_changed': boundary.isoformat()}]
+                    for entity_id in self.watcher._entities]
+            self.assertEqual(self.watcher._import_history_rows(rows, timezone.utc, boundary), 0)
+        self.assertEqual(self.history.page(1, 10)['total'], 0)
+
+    def test_on_baseline_followed_by_real_press_imports_only_transition(self):
+        start = datetime(2026, 10, 23, 8, 0, tzinfo=timezone.utc)
+        rows = [[
+            {'entity_id': self.entity.entity_id, 'state': 'on', 'last_changed': start.isoformat()},
+            {'state': 'off', 'last_changed': (start + timedelta(seconds=2)).isoformat()},
+            {'state': 'on', 'last_changed': (start + timedelta(seconds=10)).isoformat()},
+            {'state': 'on', 'last_changed': (start + timedelta(seconds=12)).isoformat()},
+        ]]
+        self.assertEqual(self.watcher._import_history_rows(rows, timezone.utc, start), 1)
+        self.assertEqual(self.watcher._import_history_rows(rows, timezone.utc, start), 0)
+        self.assertEqual(self.history.page(1, 10)['items'][0]['pressed_at'], '2026-10-23T08:00:10')
+
+    def test_unavailable_baseline_recovery_is_not_imported(self):
+        start = datetime(2026, 10, 23, 8, 0, tzinfo=timezone.utc)
+        rows = [[
+            {'entity_id': self.entity.entity_id, 'state': 'unavailable', 'last_changed': start.isoformat()},
+            {'state': 'on', 'last_changed': (start + timedelta(seconds=1)).isoformat()},
+        ]]
         self.assertEqual(self.watcher._import_history_rows(rows, timezone.utc, start), 0)
 
     def test_system_snapshot_explains_healthy_state(self):

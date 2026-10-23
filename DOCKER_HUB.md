@@ -3,8 +3,8 @@
 Веб-мониторинг кнопок переговорок через Home Assistant с уведомлениями в браузере и Telegram.
 
 - [GitHub и исходники](https://github.com/Bedmah/PereHomeLab)
-- [Изменения версии 0.1.1](https://github.com/Bedmah/PereHomeLab/releases/tag/v0.1.1)
-- Образы: `bedmah/perehomelab:0.1.1` и `bedmah/perehomelab:latest`.
+- [Изменения версии 0.1.2](https://github.com/Bedmah/PereHomeLab/releases/tag/v0.1.2)
+- Образы: `bedmah/perehomelab:0.1.2` и `bedmah/perehomelab:latest`.
 
 ## Возможности
 
@@ -15,6 +15,13 @@
 - «Я иду», отмена и комментарии в одном сообщении; ответственный синхронизируется с мониторингом.
 - Профиль сотрудника через `/sync`, личное меню через `/start`, административные ограничения и минимальный антиспам.
 - Тёмный интерфейс для ТВ и поддержка скачивания Windows kiosk-приложения из отдельного каталога.
+
+## Что нового в 0.1.2
+
+- Обновлён интерфейс в стиле Liquid Glass и адаптация к разным формам экрана.
+- Исправлены ложные нажатия при загрузке начального состояния истории HA.
+- Карточки истории выравниваются по рядам; назначение не растягивает остальные ряды.
+- Старые env и БД совместимы; ранее записанные ошибочные события автоматически не удаляются.
 
 ## Быстрый запуск
 
@@ -56,7 +63,7 @@ TELEGRAM_EVENT_TTL_SECONDS=300
 
 ```bash
 chmod 600 secret.env
-docker pull bedmah/perehomelab:0.1.1
+docker pull bedmah/perehomelab:0.1.2
 docker run -d --name perehomelab --restart unless-stopped \
   -p 80:8000 --env-file secret.env \
   -e HISTORY_DB_PATH=/app/data/press_history.db \
@@ -66,7 +73,7 @@ docker run -d --name perehomelab --restart unless-stopped \
   -v "$(pwd)/logs:/app/logs" \
   -v "$(pwd)/sound:/app/sound" \
   -v "$(pwd)/app:/download-app:ro" \
-  bedmah/perehomelab:0.1.1
+  bedmah/perehomelab:0.1.2
 ```
 
 Мониторинг: `http://SERVER_IP/`, админка: `http://SERVER_IP/admin`.
@@ -86,7 +93,7 @@ docker run -d --name perehomelab --restart unless-stopped \
 Создайте ключ один раз:
 
 ```bash
-docker run --rm --entrypoint python bedmah/perehomelab:0.1.1 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+docker run --rm --entrypoint python bedmah/perehomelab:0.1.2 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
 Сохраните результат в `TELEGRAM_ENCRYPTION_KEY`, установите `TELEGRAM_ENABLED=true` и пересоздайте контейнер. Затем в `/admin` → Telegram подключите бота нужного региона, откройте привязку, отправьте `/setup@username_бота` в нужной теме группы и подтвердите её в админке.
@@ -108,7 +115,7 @@ docker run --rm --entrypoint python bedmah/perehomelab:0.1.1 -c "from cryptograp
 ```bash
 docker stop perehomelab
 docker rm perehomelab
-docker pull bedmah/perehomelab:0.1.1
+docker pull bedmah/perehomelab:0.1.2
 ```
 
 Повторите `docker run` с теми же каталогами. Изменения env применяются после пересоздания контейнера, не простого restart. При обновлении с 0.1.0 старые настройки HA сохраняются; новые параметры нужны только для Telegram.

@@ -50,6 +50,8 @@ def main():
                 assert page.evaluate('soundEnabled')
                 assert page.evaluate('monitorPlayCount') == 1
             print('Sound startup:', 'gesture fallback OK' if initially_blocked else 'automatic without click OK')
+            assert page.locator('.battery-panel,.history-panel,.history-item,.battery-item,.nav-status,.volume-control').evaluate_all('''nodes =>
+                nodes.every(node => getComputedStyle(node).backdropFilter === 'none')'''), 'Lists must not use costly blur'
 
             checks = page.evaluate('''async () => {
                 const event = (id) => ({id, device_name:'Длинное название переговорки для проверки', area_id:'spb',
@@ -156,11 +158,11 @@ def main():
             page.wait_for_function('assignmentName.textContent === "Иван Петров · i.petrov"')
             print('Current assignee: live takeover, platform change, release and reassignment OK')
             page.evaluate('''renderHistory(Array.from({length:100},(_,index)=>({id:'layout-'+index,
-                device_name:'Очень длинное название переговорной комнаты для проверки сетки и переноса строк',
-                area_name:'Санкт-Петербург',pressed_at_display:'20.10.2026 15:00:00',call_state:'accepted',
+                device_name:index%2 ? 'Очень длинное название переговорной комнаты для проверки сетки и переноса строк' : 'Кнопка 8',
+                area_name:'Санкт-Петербург',pressed_at_display:'20.10.2026 15:00:00',call_state:index%3 ? 'accepted' : 'waiting',
                 assignee_short:index%2 ? '@telegram_username_long' : 'corporate.login.with.long.name'})))''')
-            for width in (1440, 768, 390):
-                page.set_viewport_size({'width': width, 'height': 900})
+            for width, height in ((1920, 900), (1440, 900), (1280, 900), (1024, 1024), (900, 900), (768, 900), (390, 844), (1280, 600), (800, 1280)):
+                page.set_viewport_size({'width': width, 'height': height})
                 assert not page.evaluate('document.documentElement.scrollWidth > innerWidth + 1')
                 assert page.locator('.call-details-card').evaluate('(node) => node.getBoundingClientRect().bottom <= innerHeight')
                 assert page.locator('#callComments').evaluate('(node) => node.scrollWidth <= node.clientWidth + 1')
@@ -171,10 +173,31 @@ def main():
                         return rect.bottom<=row.bottom+1 && rect.right<=row.right+1;
                     });
                 })'''), 'History card text overflow'
+                assert page.locator('.history-item').evaluate_all('''nodes => nodes.every((node,index) => {
+                    const current=node.getBoundingClientRect();
+                    return nodes.slice(index+1).every(other => {
+                        const next=other.getBoundingClientRect();
+                        return next.left>=current.right-1 || next.right<=current.left+1 || next.top>=current.bottom-1;
+                    });
+                })'''), 'History cards overlap'
+                assert page.locator('.history-item').evaluate_all('''nodes => {
+                    const rects=nodes.map(node=>node.getBoundingClientRect());
+                    return rects.every(rect=>rects.every(other=>Math.abs(rect.top-other.top)>1 || Math.abs(rect.height-other.height)<1));
+                }'''), 'History cards in the same row have different heights'
                 if args.output:
                     output = Path(args.output)
                     output.mkdir(parents=True, exist_ok=True)
                     page.screenshot(path=str(output / f'comments-{width}.png'))
+            page.evaluate("renderHistory(Array.from({length:5},(_,index)=>({id:'compact-'+index,device_name:'R13104',pressed_at_display:'23.10.2026 11:33:25',call_state:'waiting'})))")
+            assert page.locator('.history-item').evaluate_all('nodes => nodes.every(node => node.getBoundingClientRect().height < 120)'), 'Empty space reserved for missing assignees'
+            page.set_viewport_size({'width': 1920, 'height': 1080})
+            page.evaluate("renderHistory(Array.from({length:12},(_,index)=>({id:'single-assignee-'+index,device_name:'R13104',area_name:'MSK',pressed_at_display:'23.10.2026 11:33:25',call_state:index===0?'accepted':'waiting',assignee_short:'test.employee'})))")
+            assert page.locator('.history-item').evaluate_all('''nodes => {
+                const rects=nodes.map(node=>node.getBoundingClientRect());
+                return rects.every(rect=>rects.every(other=>Math.abs(rect.top-other.top)>1 || Math.abs(rect.height-other.height)<1))
+                    && rects[0].height>rects[rects.length-1].height
+                    && rects.every((rect,index)=>!index || rect.top>=rects[index-1].bottom-1 || Math.abs(rect.top-rects[index-1].top)<1);
+            }'''), 'One assignee should expand only its own row without overlap'
             page.locator('#detailsCloseButton').click()
             page.set_viewport_size({'width': 1280, 'height': 720})
             page.evaluate('addAlerts([{id:"button-style",device_name:"Проверка уведомления",area_name:"Москва"}])')
@@ -196,6 +219,7 @@ def main():
         page.on('pageerror', lambda error: errors.append(str(error)))
         page.goto(args.url.rstrip('/') + '/monitor')
         page.wait_for_function('clientConfigReady && audioProbePromise === null')
+        page.wait_for_function('browserSocketConnected')
         assert page.evaluate('soundEnabled'), 'Native silent WAV probe must work in kiosk autoplay mode'
         assert not page.evaluate('document.documentElement.scrollWidth > innerWidth + 1')
         assert page.evaluate('devicePixelRatio') == 3

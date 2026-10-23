@@ -71,7 +71,7 @@ def main() -> None:
     home, home_headers = fetch(args.url, "/")
     assert "text/html" in home_headers.get("content-type", "") and b'id="regionGrid"' in home
     monitor, _ = fetch(args.url, "/monitor")
-    assert b'id="alertAudio"' in monitor and b"app.js?v=0.1.1" in monitor
+    assert b'id="alertAudio"' in monitor and b"/static/app.js?v=" in monitor
     fetch(args.url, "/static/assets/yadro-logo.png")
     fetch(args.url, "/static/assets/fonts/JetBrainsMono-Variable.ttf")
     fetch(args.url, "/spb")

@@ -46,6 +46,16 @@ for _ in range(100):
         break
     except Exception: time.sleep(.1)
 else: raise AssertionError('Container did not start')
+status=json.loads(request('/api/status'))
+assert status.get('last_error') or status.get('watched_count') == 0
+batteries=json.loads(request('/api/batteries?limit=5'))
+assert isinstance(batteries.get('items'),list)
+assert request('/monitor')
+try:
+    request('/api/admin/users',headers={'Authorization':'Basic '+base64.b64encode(b'bad:bad').decode()})
+except urllib.error.HTTPError as error:
+    assert error.code==401
+else: raise AssertionError('Admin endpoint accepted invalid credentials')
 '''
                 if phase == 1:
                     script += '''

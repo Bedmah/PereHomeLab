@@ -11,7 +11,7 @@ PereHomeLab подключается к Home Assistant, отслеживает �
 
 Проверенная схема хранения данных и запуска контейнера: [DOCKER.md](DOCKER.md).
 
-Текущая локальная версия - **0.1.1**. Добавлены уведомления Telegram по регионам.
+Текущая версия - **0.1.2**. Изменения: [v0.1.2](RELEASE_NOTES_0.1.2.md).
 
 ```bash
 cd ~/PereHomeLab
@@ -64,7 +64,7 @@ cd ~/PereHomeLab
    TELEGRAM_ENABLED=true
    TELEGRAM_ENCRYPTION_KEY=your_generated_fernet_key
    TELEGRAM_EVENT_TTL_SECONDS=300
-   APP_VERSION=0.1.1
+   APP_VERSION=0.1.2
    ```
 
 4. Откройте `/admin` → **Telegram**. В карточке региона укажите токен, включите отправку и сохраните.
@@ -95,9 +95,9 @@ cd ~/PereHomeLab
 
 Исторические нажатия, загруженные из HA, в Telegram не рассылаются. Очередь новых сообщений сохраняется в БД и повторяет временно неудавшиеся запросы в пределах `TELEGRAM_EVENT_TTL_SECONDS` (по умолчанию 5 минут). Если Telegram мог принять сообщение, но ответ потерялся, состояние показывается как **доставка не подтверждена**: автоматического повтора нет, чтобы не создавать дубли. Нажатие кнопки на таком доставленном сообщении всё равно принимается. Статистика и ошибки видны в карточке региона. Telegram не блокирует получение событий HA.
 
-Для Docker по-прежнему достаточно volume `data`. Ключ передаётся через `--env-file secret.env`, внутрь образа его добавлять не нужно. Локальную версию можно собрать командой `docker build -t perehomelab:0.1.1 .`; публикация образа выполняется отдельно.
+Настройки и токены Telegram сохраняются в volume `data`. Ключ передаётся через `--env-file secret.env`, внутрь образа его добавлять не нужно. Сборка: `docker build -t perehomelab:0.1.2 .`.
 
-## Быстрый запуск опубликованной версии 0.1.0 в Docker
+## Быстрый запуск версии 0.1.2 в Docker
 
 ```bash
 mkdir -p /docker/perehomelab
@@ -137,7 +137,7 @@ ADMIN_PASSWORD=change_me
 
 APP_DOWNLOAD_DIR=/download-app
 APP_DOWNLOAD_FILENAME=PereHomeLabKiosk.exe
-APP_VERSION=0.1.0
+APP_VERSION=0.1.2
 ```
 
 Запустите контейнер:
@@ -153,7 +153,7 @@ docker run -d \
   -v "$(pwd)/logs:/app/logs" \
   -v "$(pwd)/app:/download-app" \
   -v "$(pwd)/sound:/app/sound" \
-  bedmah/perehomelab:0.1.0
+  bedmah/perehomelab:0.1.2
 ```
 
 Откройте веб-интерфейс:

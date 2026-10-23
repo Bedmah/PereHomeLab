@@ -2254,12 +2254,15 @@ h2 {
 }
 
 .region-grid {
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr));
   gap: 12px;
 }
 
 .region-card {
   min-height: 138px;
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
   padding: 20px;
   border-radius: 18px;
 }
@@ -2274,8 +2277,12 @@ h2 {
 }
 
 .region-count {
-  margin-top: 22px;
-  font-size: clamp(42px, 4vw, 70px);
+  margin-top: auto;
+  padding-top: 22px;
+  font-size: clamp(18px, min(4vw, calc(140cqw / var(--count-characters, 7))), 70px);
+  line-height: 1.4;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .region-label {
@@ -3027,7 +3034,7 @@ h2 {
 }
 
 .history-list {
-  grid-auto-rows: minmax(86px, auto);
+  grid-auto-rows: max-content;
 }
 
 .battery-item,

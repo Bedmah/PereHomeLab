@@ -45,9 +45,10 @@ async function loadRegions() {
   try {
     const response = await fetch('/api/areas');
     const payload = await response.json();
-    regionGrid.innerHTML = '';
-    regionGrid.appendChild(createRegionCard(payload.all || { area_id: '', display_name: 'Все', button_count: 0 }));
-    (payload.items || []).forEach((area) => regionGrid.appendChild(createRegionCard(area)));
+    const areas = [payload.all || { area_id: '', display_name: 'Все', button_count: 0 }, ...(payload.items || [])];
+    const characters = areas.reduce((longest, area) => Math.max(longest, formatButtonAvailability(area).length), 1);
+    regionGrid.style.setProperty('--count-characters', String(characters));
+    regionGrid.replaceChildren(...areas.map(createRegionCard));
     setStatus('Готово', 'ok');
   } catch {
     setStatus('Ошибка загрузки', 'error');
