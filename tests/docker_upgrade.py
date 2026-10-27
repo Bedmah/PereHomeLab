@@ -67,7 +67,7 @@ from pathlib import Path
 for attempt in range(100):
  try:
   with urllib.request.urlopen('http://127.0.0.1:8000/healthz',timeout=1) as response: data=json.load(response)
-  assert data['version']=='0.2.0'
+  assert data['version']==os.environ['APP_VERSION']
   break
  except OSError: time.sleep(.1)
 else: raise AssertionError('New container failed to start')

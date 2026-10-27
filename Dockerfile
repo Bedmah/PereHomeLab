@@ -1,6 +1,6 @@
 FROM python:3.12-slim
 
-ARG APP_VERSION=0.2.0
+ARG APP_VERSION=0.2.1
 ARG VCS_REF=unknown
 ARG TZDATA_VERSION=2026e-0+deb13u1
 LABEL org.opencontainers.image.title="PereHomeLab" \

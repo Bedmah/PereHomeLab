@@ -264,13 +264,29 @@ class StaffFlowsTest(unittest.IsolatedAsyncioTestCase):
         payload = [data for _, method, data in self.api.calls if method == 'sendMessage'][-1]
         self.assertTrue(payload['reply_markup']['is_persistent'])
         self.assertIn(self.service.profile_ui.FILL, str(payload['reply_markup']))
+        self.assertNotIn(self.service.profile_ui.CANCEL, str(payload['reply_markup']))
         self.assertIsNone(self.service.flows.pending(setting['bot_id'], 7, 'profile'))
         await self.private_message(setting, self.service.profile_ui.FILL)
         self.assertEqual(self.service.flows.pending(setting['bot_id'], 7, 'profile')['step'], 'login')
+        self.assertIn(self.service.profile_ui.CANCEL, str(self.api.calls[-1][2]['reply_markup']))
         await self.private_message(setting, 'invalid login!')
         self.assertEqual(self.service.flows.pending(setting['bot_id'], 7, 'profile')['step'], 'login')
         await self.private_message(setting, self.service.profile_ui.CANCEL)
         self.assertIsNone(self.service.flows.pending(setting['bot_id'], 7, 'profile'))
+        self.assertNotIn(self.service.profile_ui.CANCEL, str(self.api.calls[-1][2]['reply_markup']))
+
+    async def test_private_cancel_hidden_after_save_and_in_other_bot(self):
+        setting = await self.configure()
+        for text in ('/sync', 'test.login', 'Test Employee'):
+            await self.private_message(setting,text)
+        profile = self.service.employees.by_user(7)
+        self.assertNotIn(self.service.profile_ui.CANCEL,
+            str(self.service.profile_ui.keyboard(profile,bot_token(222222))))
+        flow = self.service.flows.pending(setting['bot_id'],7,'profile')
+        await self.callback(setting,'profile:'+flow['id'],flow=flow)
+        self.assertNotIn(self.service.profile_ui.CANCEL,str(self.api.calls[-2][2]['reply_markup']))
+        self.assertNotIn(self.service.profile_ui.CANCEL,
+            str(self.service.profile_ui.keyboard(self.service.employees.by_user(7),bot_token())))
 
     async def test_duplicate_login_confirmation_can_restart(self):
         setting = await self.configure()

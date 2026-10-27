@@ -51,6 +51,28 @@ class PrivateNotificationsTest(unittest.IsolatedAsyncioTestCase):
         await self.message(setting,7,self.service.private.UNSUBSCRIBE)
         self.assertFalse(self.service.private.state(setting,7)['enabled'])
 
+    async def test_private_profile_status_and_subscription_buttons(self):
+        setting=await self.configure()
+        await self.message(setting,7,'/start')
+        self.assertIn('Статус: 📝 Не заполнен',self.api.calls[-1][2]['text'])
+        self.service.employees.save('7','employee.7','Test Person')
+        await self.message(setting,7,'/start')
+        self.assertIn('Статус: ⏳ Ожидает подтверждения',self.api.calls[-1][2]['text'])
+        await self.subscriber(setting)
+        await self.message(setting,7,'/start')
+        self.assertIn('Статус: ✅ Подтверждён',self.api.calls[-1][2]['text'])
+        self.assertIn('Уведомления включены',str(self.api.calls[-1][2]['reply_markup']))
+        await self.message(setting,7,'🔕 Отписаться от уведомлений')
+        self.assertFalse(self.service.private.state(setting,7)['enabled'])
+        self.assertIn('Уведомления выключены',str(self.api.calls[-1][2]['reply_markup']))
+        await self.message(setting,7,'🔔 Подписаться на уведомления')
+        self.assertTrue(self.service.private.state(setting,7)['enabled'])
+        profile=self.service.employees.by_user(7)
+        self.service.employees.set_area_access(profile['id'],'spb',False,'admin')
+        await self.message(setting,7,'/start')
+        self.assertIn('Статус: ⛔ Доступ ограничен',self.api.calls[-1][2]['text'])
+        self.assertNotIn('Уведомления включены',str(self.api.calls[-1][2]['reply_markup']))
+
     async def test_no_history_replay_no_duplicates_and_restart_persistence(self):
         setting = await self.configure()
         self.event('old',when=datetime.now()-timedelta(seconds=2))

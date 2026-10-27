@@ -62,8 +62,10 @@ def main():
                     'blocked':False,'enabled':subscriptions.get(item['id'],False),'available':bool(item.get('profile_locked')),
                     'reason':'' if item.get('profile_locked') else 'Сначала подтвердите профиль'}]})
             elif path.path.endswith('/activity'):
-                route.fulfill(json={'items':[{'title':'Добавил комментарий','details':'<img src=x onerror=alert(1)>',
-                    'created_at_display':'27.10.2026 12:00:00','actor':'Test'}],'total':1,'page':1,'total_pages':1})
+                activity_page=int(parse_qs(path.query).get('page',['1'])[0])
+                entries=[{'title':'Добавил комментарий','details':'<img src=x onerror=alert(1)>' if index==0 else 'Комментарий '+str(index),
+                    'created_at_display':'27.10.2026 12:00:00','actor':'Test'} for index in range((activity_page-1)*10,min(activity_page*10,23))]
+                route.fulfill(json={'items':entries,'total':23,'page':activity_page,'total_pages':3})
             elif path.path.endswith('/audit'):
                 route.fulfill(json={'items':[]})
             else:
@@ -83,6 +85,14 @@ def main():
         page.locator('.employee-list .telegram-region-card').wait_for()
         page.locator('.employee-activity').get_by_text('<img src=x onerror=alert(1)>',exact=True).wait_for()
         assert page.locator('.employee-activity img').count()==0
+        assert page.locator('.employee-activity li').count()==10
+        page.get_by_role('button',name='Следующая страница истории сотрудника',exact=True).click()
+        page.locator('.employee-extras').get_by_text('2 / 3',exact=True).wait_for()
+        assert page.locator('.employee-activity li').count()==10
+        page.get_by_role('button',name='Следующая страница истории сотрудника',exact=True).click()
+        page.locator('.employee-extras').get_by_text('3 / 3',exact=True).wait_for()
+        assert page.locator('.employee-activity li').count()==3
+        assert page.get_by_role('button',name='Следующая страница истории сотрудника',exact=True).is_disabled()
         card = page.locator('.employee-list article').first
         assert card.locator('.employee-badge').is_visible()
         card.get_by_label('Корпоративный логин', exact=True).fill('i.petrov')
@@ -139,9 +149,13 @@ def main():
             page.locator('#adminLocationSelect').select_option(other_area)
             assert page.locator('#adminLocationSelect').input_value()==previous_area
             assert pending.get_by_label('Корпоративный логин',exact=True).input_value()=='unsaved.login'
-        for width in (1440,768,390):
+        for width in (1920,1440,960,768,390,320):
             page.set_viewport_size({'width':width,'height':950})
             assert not page.evaluate('document.documentElement.scrollWidth > innerWidth + 1')
+            back=page.locator('.employee-back').bounding_box()
+            profile=page.locator('.employee-list > .telegram-region-card').bounding_box()
+            assert back['height']<80 and back['width']<350,(width,back)
+            assert back['y']+back['height']<=profile['y'],(width,back,profile)
             if args.output:
                 output = Path(args.output)
                 output.mkdir(parents=True, exist_ok=True)

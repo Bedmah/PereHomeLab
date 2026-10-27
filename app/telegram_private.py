@@ -6,8 +6,8 @@ from app.redaction import redact_sensitive
 
 
 class TelegramPrivate:
-    SUBSCRIBE = '🔔 Подписаться на уведомления'
-    UNSUBSCRIBE = '🔕 Отписаться от уведомлений'
+    SUBSCRIBE = '🔕 Уведомления выключены · Подписаться'
+    UNSUBSCRIBE = '🔔 Уведомления включены · Отписаться'
 
     def __init__(self, service):
         self.service = service
@@ -297,13 +297,15 @@ class TelegramPrivate:
         command = text.split(maxsplit=1)[0].lower() if text else ''
         subscribe = {'/subscribe','/subscribe@'+setting['bot_username'].lower()}
         unsubscribe = {'/unsubscribe','/unsubscribe@'+setting['bot_username'].lower()}
-        if text not in {self.SUBSCRIBE,self.UNSUBSCRIBE} and command not in subscribe | unsubscribe:
+        subscribe_buttons = {self.SUBSCRIBE,'🔔 Подписаться на уведомления'}
+        unsubscribe_buttons = {self.UNSUBSCRIBE,'🔕 Отписаться от уведомлений'}
+        if text not in subscribe_buttons | unsubscribe_buttons and command not in subscribe | unsubscribe:
             return False
         self.service.profile_ui.cancel(setting,user)
         for flow in self.service.flows.comments_for_user(setting['bot_id'],user['id'],user['id']):
             self.service.flows.update(flow['id'],done=True)
             await self.service.interactions.finish(token,flow,'Ввод отменён')
-        enabled = text==self.SUBSCRIBE or command in subscribe
+        enabled = text in subscribe_buttons or command in subscribe
         try:
             self.set_subscription(setting,user['id'],enabled)
             answer = 'Подписка включена. Будут приходить только новые вызовы этой локации.' if enabled else 'Подписка отключена. Ваши принятые вызовы не отменены.'

@@ -17,7 +17,9 @@ class TelegramProfile:
         subscription = self.service.private.menu(token,profile) if token else None
         if subscription:
             rows.append([{'text':subscription}])
-        rows.append([{'text':self.CANCEL}])
+        if (token and profile and not profile['blocked'] and not profile['profile_locked']
+                and self.service.flows.pending(int(token.split(':',1)[0]),profile['telegram_user_id'],'profile')):
+            rows.append([{'text':self.CANCEL}])
         return {'keyboard':rows,'resize_keyboard':True,'is_persistent':True}
 
     async def send(self, token, user, text):
@@ -35,8 +37,19 @@ class TelegramProfile:
         profile = self.service.employees.by_user(user['id'])
         if not profile:
             profile = self.service.employees.observe(user)
+        setting = next((item for item in self.service.store.settings() if str(item['bot_id'])==token.split(':',1)[0]),None)
+        restricted = profile['blocked'] or bool(setting and (
+            not self.service.employees.area_enabled(profile['id'],setting['area_id'])
+            or (profile['allowed_areas'] is not None and setting['area_id'] not in profile['allowed_areas'])))
+        status = '⛔ Доступ ограничен' if restricted else ('✅ Подтверждён' if profile['profile_locked']
+            else '⏳ Ожидает подтверждения' if profile['profile_complete'] else '📝 Не заполнен')
         text = ('👤 Мои данные\nФИО: ' + profile['full_name'] + '\nЛогин: '
-                + (profile['login'] or 'не заполнен') + '\nTelegram ID: ' + str(user['id']))
+                + (profile['login'] or 'не заполнен') + '\nTelegram ID: ' + str(user['id'])+'\nСтатус: '+status)
+        if setting:
+            city = self.service._city(setting['area_id'])
+            text += '\nЛокация: '+(city.display_name if city else setting['area_id'])
+        if restricted and not profile['blocked']:
+            text += '\nДоступ к этой локации ограничен администратором.'
         if profile['blocked']:
             text += '\n⛔ Профиль заблокирован. Обратитесь к администратору.'
         elif profile['profile_locked']:

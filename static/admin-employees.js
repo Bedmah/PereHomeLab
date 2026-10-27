@@ -90,12 +90,16 @@
     card.append(label);
     return input;
   }
+  function profileStatus(item) {
+    if (item.blocked || item.area_enabled===false || (!allProfiles.checked && item.allowed_areas && !item.allowed_areas.includes(selectedAdminArea))) return 'Доступ ограничен';
+    return item.profile_locked ? 'Подтверждён' : item.profile_complete ? 'Ожидает подтверждения' : 'Не заполнен';
+  }
   function card(item) {
     const regional = currentAdmin?.role === 'location';
     const profileArea = selectedAdminArea;
     const article = node('article', '', 'telegram-region-card');
     article.append(node('h3', item.display_name));
-    const verified = node('span',item.profile_locked ? 'Подтверждён' : 'Не подтверждён','employee-state');
+    const verified = node('span',profileStatus(item),'employee-state');
     article.append(verified);
     const incomplete = node('span', 'Нужно заполнить логин и ФИО', 'employee-badge');
     incomplete.hidden = item.profile_complete !== false;
@@ -104,6 +108,11 @@
       article.append(node('p', 'Telegram: ' + [item.telegram_name, item.telegram_username ? '@' + item.telegram_username : ''].filter(Boolean).join(' · '), 'telegram-meta'));
     }
     if (item.last_seen_at_display) article.append(node('p', 'Последнее обращение: ' + item.last_seen_at_display, 'telegram-meta'));
+    const identity = node('section','','employee-profile-fields');
+    const permissions = node('section','','employee-permissions');
+    identity.append(node('h4','Данные сотрудника'));
+    permissions.append(node('h4','Доступ и подтверждение'));
+    article.append(identity);
     if (!allProfiles.checked) {
       const accessLabel = node('label', '', 'telegram-toggle');
       const enabled = document.createElement('input'); enabled.type = 'checkbox'; enabled.checked = Boolean(item.area_enabled);
@@ -116,17 +125,18 @@
         enabled.disabled = true;
         try {
           await request(`/${item.id}/areas/${encodeURIComponent(areaId)}`, {method:'PUT',body:JSON.stringify({enabled:enabled.checked})});
+          item.area_enabled=enabled.checked;
+          verified.textContent=profileStatus(item);
           feedback.textContent = 'Сохранено';
           refreshExtras();
         } catch (error) { enabled.checked = !enabled.checked; feedback.textContent = error.message; }
         finally { enabled.disabled = false; }
       };
-      article.append(accessLabel, feedback);
-      article.append(node('p','ФИО, логин и запрет изменения профиля общие для всех локаций.','admin-note'));
+      permissions.append(accessLabel, feedback);
     }
-    const login = field(article, 'Корпоративный логин', item.login);
-    const name = field(article, 'ФИО', item.full_name);
-    const telegram = field(article, regional ? 'Telegram ID' : 'Telegram ID (очистите для отвязки)', item.telegram_user_id);
+    const login = field(identity, 'Корпоративный логин', item.login);
+    const name = field(identity, 'ФИО', item.full_name);
+    const telegram = field(identity, regional ? 'Telegram ID' : 'Telegram ID (очистите для отвязки)', item.telegram_user_id);
     telegram.readOnly = regional;
     login.placeholder = 'Корпоративный логин';
     article.addEventListener('input', (event) => { if (!event.target.dataset.autoSave) article.dataset.dirty = 'true'; });
@@ -179,7 +189,8 @@
         name.value = result.item.full_name;
         telegram.value = result.item.telegram_user_id || '';
         incomplete.hidden = result.item.profile_complete !== false;
-        verified.textContent = result.item.profile_locked ? 'Подтверждён' : 'Не подтверждён';
+        Object.assign(item,result.item);
+        verified.textContent = profileStatus(item);
         delete article.dataset.dirty;
         feedback.textContent = 'Сохранено';
         refreshExtras();
@@ -187,10 +198,12 @@
       finally { save.disabled = false; }
     };
     controls.append(save);
-    article.append(blockedLabel, lockedLabel,node('p','Эта галочка подтверждает аккаунт и разрешает подписку и действия в ЛС.','admin-note'),accessLabel, areas, controls, feedback);
+    permissions.append(blockedLabel, lockedLabel,node('p','Подтверждение разрешает подписку и действия в ЛС. Данные профиля общие для всех локаций сотрудника.','admin-note'),accessLabel, areas);
+    article.append(permissions, controls, feedback);
     return article;
   }
   function detailMode(active) {
+    list.classList.toggle('employee-detail',active);
     panel.querySelector('.employee-tools').hidden = active;
     filters.hidden = active; createBlock.hidden = active;
     allProfiles.closest('label').hidden = active;
@@ -203,7 +216,7 @@
     const identity = node('div');
     identity.append(node('h3',item.full_name),node('span',item.login || (item.telegram_username ? '@'+item.telegram_username : 'Telegram '+(item.telegram_user_id || 'не привязан')),'telegram-meta'));
     const badges = node('div','','employee-badges');
-    badges.append(node('span',item.profile_locked ? 'Подтверждён' : 'Не подтверждён','employee-state'),
+    badges.append(node('span',profileStatus(item),'employee-state'),
       node('span',item.subscribed ? 'ЛС включены' : 'ЛС выключены','employee-state'));
     if (item.blocked || item.area_enabled===false) badges.append(node('span','Доступ ограничен','employee-state restricted'));
     button.append(identity,badges); button.onclick=()=>openEmployee(item.id);
@@ -217,7 +230,7 @@
       const result = await request('/'+id+'/detail?'+scopeQuery().replace(/^&/,''));
       if (current!==sequence) return;
       selectedEmployee=id; detailMode(true); historyPage=1; historyKind='';
-      const back=node('button','← К списку сотрудников','mini-button'); back.type='button';
+      const back=node('button','← К списку сотрудников','mini-button employee-back'); back.type='button';
       back.onclick=()=>{
         if (list.querySelector('[data-dirty]') && !confirm('Вернуться без сохранения?')) return;
         selectedEmployee=null; extrasSequence++; detailMode(false); load();

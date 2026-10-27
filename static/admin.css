@@ -79,6 +79,14 @@
 .global-settings-form { display: grid; gap: 14px; max-width: 720px; }
 .global-settings-form button { justify-self: start; }
 .employee-summary { min-width: 0; }
+.admin-page .employee-list { grid-template-columns: minmax(0,1fr); align-items: start; }
+.admin-page .employee-list.employee-detail { grid-template-columns: minmax(0,1fr) minmax(0,1.2fr); }
+.admin-page .employee-back { grid-column: 1 / -1; justify-self: start; align-self: start; width: auto; min-height: 42px; }
+.employee-detail > .telegram-region-card { align-self: start; }
+.employee-profile-fields, .employee-permissions { margin-top: 18px; padding-top: 16px; border-top: 1px solid #334861; }
+.employee-detail h4 { margin: 0 0 12px; font-size: 16px; }
+.employee-detail > *, .employee-extras > * { min-width: 0; }
+@media (max-width: 1150px) { .admin-page .employee-list.employee-detail { grid-template-columns: minmax(0,1fr); } }
 .admin-page .employee-row { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 16px; width: 100%; padding: 14px 18px; text-align: left; }
 .employee-row h3 { margin: 0 0 4px; overflow-wrap: anywhere; }
 .employee-row .telegram-meta { display: block; margin: 0; }

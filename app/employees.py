@@ -315,8 +315,8 @@ class EmployeeStore:
         selected = 'SELECT * FROM ('+query+') WHERE (?=\'\' OR kind=?)'
         with self.connect() as connection:
             total = connection.execute('SELECT COUNT(*) FROM ('+selected+')',(*params,kind,kind)).fetchone()[0]
-            rows = connection.execute(selected+' ORDER BY created_at DESC,kind DESC,sequence DESC LIMIT 20 OFFSET ?',
-                (*params,kind,kind,(page-1)*20)).fetchall()
+            rows = connection.execute(selected+' ORDER BY created_at DESC,kind DESC,sequence DESC LIMIT 10 OFFSET ?',
+                (*params,kind,kind,(page-1)*10)).fetchall()
         labels = {'assign':'Пошёл','claim':'Пошёл','takeover':'Сменил ответственного','release':'Отменил принятие','comment':'Добавил комментарий',
             'profile_saved':'Сохранил профиль','discovered':'Обнаружен в Telegram','admin_created':'Сотрудник добавлен',
             'admin_updated':'Профиль изменён','self_cleared':'Корпоративные данные удалены',
@@ -343,4 +343,4 @@ class EmployeeStore:
                     parts.append(str(data['reason']))
                 item['details'] = ' · '.join(parts)
             items.append(item)
-        return {'items':items,'total':total,'page':page,'total_pages':max(1,(total+19)//20)}
+        return {'items':items,'total':total,'page':page,'total_pages':max(1,(total+9)//10)}
