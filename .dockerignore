@@ -25,3 +25,5 @@ __pycache__
 *.pyo
 .pytest_cache
 .DS_Store
+RELEASE_AUDIT_*.md
+SECURITY_REVIEW_*.md

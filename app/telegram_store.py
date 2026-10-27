@@ -226,7 +226,10 @@ class TelegramStore:
         exclusions = ' AND o.area_id NOT IN (' + ','.join('?' for _ in exclude_areas) + ')' if exclude_areas else ''
         with self.connect() as connection:
             connection.execute("UPDATE telegram_outbox SET state = 'expired' WHERE state = 'queued' AND expires_at <= ?", (time.time(),))
-            connection.execute("UPDATE telegram_outbox SET state = 'canceled' WHERE state = 'queued' AND event_id IN (SELECT id FROM press_history WHERE acknowledged_at IS NOT NULL AND COALESCE(acknowledged_source,'')!='' AND COALESCE(acknowledged_user_id,'')!='')")
+            private_copy = ''
+            if connection.execute("SELECT 1 FROM sqlite_master WHERE name='telegram_private_outbox'").fetchone():
+                private_copy = " AND NOT EXISTS(SELECT 1 FROM telegram_private_outbox p WHERE p.event_id=telegram_outbox.event_id AND p.bot_id=telegram_outbox.bot_id AND p.state IN ('sent','sending','uncertain'))"
+            connection.execute("UPDATE telegram_outbox SET state = 'canceled' WHERE state = 'queued' AND event_id IN (SELECT id FROM press_history WHERE acknowledged_at IS NOT NULL AND COALESCE(acknowledged_source,'')!='' AND COALESCE(acknowledged_user_id,'')!='')"+private_copy)
             row = connection.execute('''SELECT o.*, h.device_name, h.area_name, h.pressed_at_display
                 FROM telegram_outbox o JOIN press_history h ON h.id = o.event_id
                 WHERE o.state = 'queued' AND o.next_attempt <= ?''' + exclusions + ' ORDER BY h.pressed_at LIMIT 1',

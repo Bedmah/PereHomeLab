@@ -85,6 +85,12 @@ class TelegramFlows:
 
     def for_original_reply(self, bot_id, user_id, chat_id, message_id):
         with self.store.connect() as connection:
+            if chat_id==int(user_id):
+                return self.decode(connection.execute('''SELECT f.* FROM telegram_flows f
+                    JOIN telegram_private_outbox o ON o.event_id=f.event_id AND o.bot_id=f.bot_id AND o.user_id=f.user_id
+                    WHERE f.bot_id=? AND f.user_id=? AND f.chat_id=? AND o.message_id=?
+                        AND f.kind='comment' AND f.done=0 AND f.expires_at>? ORDER BY f.rowid DESC LIMIT 1''',
+                    (bot_id,str(user_id),chat_id,message_id,time.time())).fetchone())
             return self.decode(connection.execute('''SELECT f.* FROM telegram_flows f JOIN telegram_outbox o ON o.event_id=f.event_id
                 WHERE f.bot_id=? AND f.user_id=? AND f.chat_id=? AND o.message_id=? AND o.bot_id=f.bot_id AND o.chat_id=f.chat_id
                 AND f.kind='comment' AND f.done=0 AND f.expires_at>? ORDER BY f.rowid DESC LIMIT 1''',

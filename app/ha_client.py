@@ -7,10 +7,12 @@ import requests
 import websockets
 
 from app.config import AppConfig
+from app.redaction import redact_sensitive
 
 
 class HomeAssistantError(Exception):
-    pass
+    def __init__(self, message: str):
+        super().__init__(redact_sensitive(message))
 
 
 class HomeAssistantClient:

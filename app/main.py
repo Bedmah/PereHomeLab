@@ -22,6 +22,7 @@ from app.config import PROJECT_ROOT, get_live_ack_button_text, get_live_sound_pl
 from app.ha_client import HomeAssistantClient
 from app.history import HistoryStore
 from app.logging_config import configure_logging
+from app.redaction import redact_sensitive
 from app.users import UserStore
 from app.admin_access import require_area, require_global, require_user_control, visible_areas
 from app.admin_sessions import AdminSessions
@@ -32,10 +33,9 @@ from app.telegram_service import TelegramError, TelegramService
 logger = configure_logging()
 config = load_config()
 logger.info(
-    'Config loaded: version=%s, HA_URL=%s, token_length=%s, auto_discover=%s, domain=%s, device_class=%s, trigger=%s, history_sync_hours=%s, db=%s, sound=%s, app_download=%s/%s',
+    'Config loaded: version=%s, HA_URL=%s, auto_discover=%s, domain=%s, device_class=%s, trigger=%s, history_sync_hours=%s, db=%s, sound=%s, app_download=%s/%s',
     config.app_version,
-    config.ha_url,
-    len(config.ha_token),
+    redact_sensitive(config.ha_url),
     config.ha_auto_discover,
     config.ha_entity_domain,
     config.ha_device_class or '-',
@@ -138,7 +138,7 @@ def recent_error_log_items(limit: int) -> list[dict]:
             continue
         for line in lines[-2000:]:
             if any(marker in line for marker in markers):
-                items.append({'source': log_name, 'line': line})
+                items.append({'source': log_name, 'line': redact_sensitive(line)})
     return items[-limit:]
 
 
@@ -167,6 +167,14 @@ class EmployeeCreateRequest(BaseModel):
     login: str = Field(max_length=100)
     full_name: str = Field(max_length=150)
     telegram_user_id: str | None = Field(default=None, max_length=20)
+
+
+class EmployeeProfileRequest(BaseModel):
+    model_config = {'extra': 'forbid'}
+    area_id: str = Field(min_length=1, max_length=200)
+    login: str = Field(max_length=100)
+    full_name: str = Field(max_length=150)
+    profile_locked: bool
 
 
 class TelegramSetupRequest(BaseModel):
@@ -294,6 +302,19 @@ class UserAccessRequest(BaseModel):
 
 class EmployeeAreaRequest(BaseModel):
     enabled: bool
+
+
+def employee_scope(admin, employee_id, area_id):
+    if area_id:
+        require_area(admin,area_id)
+        if area_id not in telegram.employees.areas_for(employee_id):
+            raise HTTPException(404,'Сотрудник в этой локации не найден')
+    else:
+        require_global(admin)
+    employee = telegram.employees.get(employee_id)
+    if not employee:
+        raise HTTPException(404,'Сотрудник не найден')
+    return employee, [area_id] if area_id else None
 
 
 class GlobalSettingsRequest(BaseModel):
@@ -476,13 +497,13 @@ async def diagnostics() -> dict:
         ha_response = await ha_client.health_check()
         ha_ok = True
     except Exception as exc:
-        ha_error = str(exc)
+        ha_error = redact_sensitive(str(exc))
 
     return jsonable_encoder({
         'ha_ok': ha_ok,
         'ha_error': ha_error,
         'ha_response': ha_response,
-        'ha_url': config.ha_url,
+        'ha_url': redact_sensitive(config.ha_url),
         'ha_token_length': len(config.ha_token),
         'ha_auto_discover': config.ha_auto_discover,
         'ha_entity_ids_count': len(config.ha_entity_ids),
@@ -685,12 +706,64 @@ async def alerts_state(request: AcknowledgeRequest) -> dict:
 
 @app.get('/api/admin/employees')
 async def admin_employees(q: str = Query(default='', max_length=150), page: int = Query(default=1, ge=1),
-                          area_id: str | None = None, admin: dict = Depends(require_admin)) -> dict:
+                          area_id: str | None = None, confirmed: bool | None = None, subscribed: bool | None = None,
+                          admin: dict = Depends(require_admin)) -> dict:
     if area_id:
         require_area(admin, area_id)
     else:
         require_global(admin)
-    return telegram.employees.page(q, page, area_id=area_id)
+    return telegram.employees.page(q, page, area_id=area_id,confirmed=confirmed,subscribed=subscribed)
+
+
+@app.get('/api/admin/employees/{employee_id}/detail')
+async def admin_employee_detail(employee_id: str, area_id: str | None = None, admin: dict = Depends(require_admin)):
+    employee, scope = employee_scope(admin,employee_id,area_id)
+    if area_id:
+        employee['area_enabled'] = telegram.employees.area_enabled(employee_id,area_id)
+    observed = telegram.employees.areas_for(employee_id)
+    locations = []
+    for city in cities.list(include_disabled=True):
+        if city.area_id not in observed or (scope is not None and city.area_id not in scope):
+            continue
+        setting = telegram._setting(city.area_id)
+        state = {'opened':False,'blocked':False,'enabled':False,'last_error':None}
+        reason = 'Бот не настроен' if not setting else 'Не привязан Telegram ID'
+        available = False
+        if setting and employee['telegram_user_id']:
+            state = telegram.private.state(setting,employee['telegram_user_id'])
+            try:
+                telegram.private.eligible(setting,employee['telegram_user_id'])
+                available = True; reason = ''
+            except ValueError as exc:
+                reason = str(exc)
+        locations.append({'area_id':city.area_id,'display_name':city.display_name,**state,'available':available,'reason':reason})
+    return {'item':employee,'locations':locations}
+
+
+@app.get('/api/admin/employees/{employee_id}/activity')
+async def admin_employee_activity(employee_id: str, area_id: str | None = None, page: int = Query(default=1,ge=1),
+                                  kind: str = Query(default='',pattern='^(|calls|profile|subscriptions)$'), admin: dict = Depends(require_admin)):
+    _, scope = employee_scope(admin,employee_id,area_id)
+    payload = telegram.employees.activity(employee_id,scope,page,kind)
+    names = {city.area_id:city.display_name for city in cities.list(include_disabled=True)}
+    for item in payload['items']:
+        item['area_name'] = names.get(item['area_id']) or item['area_name']
+    return payload
+
+
+@app.put('/api/admin/employees/{employee_id}/subscriptions/{area_id}')
+async def admin_employee_subscription(employee_id: str, area_id: str, request: EmployeeAreaRequest, admin: dict = Depends(require_admin)):
+    employee, _ = employee_scope(admin,employee_id,area_id)
+    setting = telegram._setting(area_id)
+    if not setting or not employee['telegram_user_id']:
+        raise HTTPException(400,'Сначала настройте бота и привяжите Telegram ID')
+    try:
+        telegram.private.set_subscription(setting,employee['telegram_user_id'],request.enabled,admin['username'])
+    except ValueError as exc:
+        raise HTTPException(400,str(exc)) from None
+    audit_change(admin,'employees','Подписка на личные уведомления изменена',employee['display_name'],
+        after={'enabled':request.enabled},area_ids=[area_id])
+    return {'saved':True}
 
 
 @app.post('/api/admin/employees')
@@ -730,6 +803,31 @@ async def admin_employee_update(employee_id: str, request: EmployeeUpdateRequest
             if user_id:
                 telegram.seen_users.pop(user_id, None)
         await broadcast_call_change(changes, 'profile')
+        return {'item': item}
+    except KeyError:
+        raise HTTPException(404, 'Сотрудник не найден') from None
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+
+
+@app.put('/api/admin/employees/{employee_id}/profile')
+async def admin_employee_profile(employee_id: str, request: EmployeeProfileRequest,
+                                 admin: dict = Depends(require_admin)) -> dict:
+    require_area(admin, request.area_id)
+    areas = telegram.employees.areas_for(employee_id)
+    if request.area_id not in areas:
+        raise HTTPException(404, 'Сотрудник в этой локации не найден')
+    try:
+        previous = telegram.employees.get(employee_id)
+        item = telegram.employees.update(employee_id, request.login, request.full_name, False,
+            None, None, admin['username'], request.profile_locked, profile_only=True)
+        fields = ('login', 'full_name', 'profile_locked')
+        audit_change(admin,'employees','Профиль сотрудника изменён',item['display_name'],
+            {key:previous.get(key) for key in fields},{key:item.get(key) for key in fields},areas)
+        user_id = item['telegram_user_id']
+        if user_id:
+            telegram.seen_users.pop(user_id, None)
+            await broadcast_call_change(telegram.calls.refresh_profile([user_id]), 'profile')
         return {'item': item}
     except KeyError:
         raise HTTPException(404, 'Сотрудник не найден') from None

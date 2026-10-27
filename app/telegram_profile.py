@@ -8,19 +8,22 @@ class TelegramProfile:
     def __init__(self, service):
         self.service = service
 
-    def keyboard(self, profile):
+    def keyboard(self, profile, token=None):
         rows = [[{'text':self.SHOW}]]
         if profile and not profile['blocked'] and not profile['profile_locked']:
             rows.append([{'text':self.EDIT if profile['profile_complete'] else self.FILL}])
             if profile['profile_complete']:
                 rows.append([{'text':self.DELETE}])
+        subscription = self.service.private.menu(token,profile) if token else None
+        if subscription:
+            rows.append([{'text':subscription}])
         rows.append([{'text':self.CANCEL}])
         return {'keyboard':rows,'resize_keyboard':True,'is_persistent':True}
 
     async def send(self, token, user, text):
         profile = self.service.employees.by_user(user['id'])
         return await self.service.api.call(token,'sendMessage',chat_id=user['id'],text=text,
-                                           reply_markup=self.keyboard(profile))
+                                           reply_markup=self.keyboard(profile,token))
 
     def cancel(self, setting, user):
         for kind in ('profile','profile_delete'):
@@ -37,9 +40,11 @@ class TelegramProfile:
         if profile['blocked']:
             text += '\n⛔ Профиль заблокирован. Обратитесь к администратору.'
         elif profile['profile_locked']:
-            text += '\n🔒 Данные закреплены администратором. Самостоятельное изменение и удаление недоступны.'
+            text += '\n✅ Профиль подтверждён. Данные закреплены администратором. Самостоятельное изменение и удаление недоступны.'
         elif not profile['profile_complete']:
             text += '\nНажмите «Заполнить профиль», чтобы указать логин и ФИО.'
+        if not profile['profile_locked'] and not profile['blocked']:
+            text += '\nДля подписки на уведомления требуется подтверждение администратора.'
         return await self.send(token,user,(prefix+'\n\n' if prefix else '')+text)
 
     def editable(self, user):

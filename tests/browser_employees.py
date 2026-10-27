@@ -25,6 +25,7 @@ def main():
         'profile_complete':False,'blocked':False,'allowed_areas':None,'telegram_name':'Иван','telegram_username':'test_employee',
         'last_seen_at_display':'20.10.2026 17:00:00'}]
     errors = []
+    subscriptions = {}
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True, executable_path=args.browser)
         authorization = base64.b64encode(f'{username}:{password}'.encode()).decode()
@@ -35,7 +36,11 @@ def main():
         def handle(route):
             request = route.request
             path = urlsplit(request.url)
-            if request.method == 'POST':
+            if '/subscriptions/' in path.path:
+                employee_id=path.path.split('/')[-3]
+                subscriptions[employee_id]=request.post_data_json['enabled']
+                route.fulfill(json={'saved':True})
+            elif request.method == 'POST':
                 data = request.post_data_json
                 if any(item['login'] == data['login'].lower() for item in employees):
                     route.fulfill(status=400, json={'detail':'Логин уже существует'})
@@ -51,6 +56,14 @@ def main():
                 item['profile_complete'] = bool(item['login'])
                 item['display_name'] = item['full_name']+(' · '+item['login'] if item['login'] else '')
                 route.fulfill(json={'item':item})
+            elif path.path.endswith('/detail'):
+                item = next(item for item in employees if item['id']==path.path.split('/')[-2])
+                route.fulfill(json={'item':item,'locations':[{'area_id':'spb','display_name':'SPB','opened':True,
+                    'blocked':False,'enabled':subscriptions.get(item['id'],False),'available':bool(item.get('profile_locked')),
+                    'reason':'' if item.get('profile_locked') else 'Сначала подтвердите профиль'}]})
+            elif path.path.endswith('/activity'):
+                route.fulfill(json={'items':[{'title':'Добавил комментарий','details':'<img src=x onerror=alert(1)>',
+                    'created_at_display':'27.10.2026 12:00:00','actor':'Test'}],'total':1,'page':1,'total_pages':1})
             elif path.path.endswith('/audit'):
                 route.fulfill(json={'items':[]})
             else:
@@ -62,6 +75,14 @@ def main():
         page.goto(args.url.rstrip('/') + '/admin')
         page.get_by_role('button', name='Сотрудники', exact=True).click()
         page.locator('.employee-list article').first.wait_for()
+        assert page.locator('.employee-list input').count()==0
+        if args.output:
+            Path(args.output).mkdir(parents=True,exist_ok=True)
+            page.screenshot(path=str(Path(args.output)/'employees-list.png'),full_page=True)
+        page.locator('.employee-row').first.click()
+        page.locator('.employee-list .telegram-region-card').wait_for()
+        page.locator('.employee-activity').get_by_text('<img src=x onerror=alert(1)>',exact=True).wait_for()
+        assert page.locator('.employee-activity img').count()==0
         card = page.locator('.employee-list article').first
         assert card.locator('.employee-badge').is_visible()
         card.get_by_label('Корпоративный логин', exact=True).fill('i.petrov')
@@ -71,7 +92,14 @@ def main():
         card.get_by_text('Сохранено', exact=True).wait_for()
         assert not card.locator('.employee-badge').is_visible()
         assert employees[0]['profile_locked'] is True
+        page.locator('.employee-subscription input').check()
+        page.wait_for_function('document.querySelector(".employee-subscription input").checked && !document.querySelector(".employee-subscription input").disabled')
+        assert subscriptions['auto-91'] is True
+        page.locator('.employee-subscription input').uncheck()
+        page.wait_for_function('!document.querySelector(".employee-subscription input").checked && !document.querySelector(".employee-subscription input").disabled')
+        assert subscriptions['auto-91'] is False
 
+        page.get_by_role('button',name='← К списку сотрудников',exact=True).click()
         page.locator('.employee-create summary').click()
         form = page.locator('.employee-create-form')
         form.get_by_label('Корпоративный логин', exact=True).fill('a.ivanova')
@@ -92,6 +120,9 @@ def main():
                           'profile_complete':False,'allowed_areas':None,'blocked':False})
         page.get_by_role('heading', name='Новый участник', exact=True).wait_for(timeout=15000)
         pending = page.locator('.employee-list article').filter(has=page.get_by_role('heading', name='Новый участник', exact=True))
+        pending.locator('.employee-row').click()
+        pending = page.locator('.employee-list .telegram-region-card')
+        pending.wait_for()
         pending.get_by_label('Корпоративный логин', exact=True).fill('unsaved.login')
         page.wait_for_timeout(10500)
         assert pending.get_by_label('Корпоративный логин', exact=True).input_value() == 'unsaved.login'

@@ -1,7 +1,8 @@
 FROM python:3.12-slim
 
-ARG APP_VERSION=0.1.3
+ARG APP_VERSION=0.2.0
 ARG VCS_REF=unknown
+ARG TZDATA_VERSION=2026e-0+deb13u1
 LABEL org.opencontainers.image.title="PereHomeLab" \
     org.opencontainers.image.source="https://github.com/Bedmah/PereHomeLab" \
     org.opencontainers.image.version=$APP_VERSION \
@@ -17,7 +18,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends tzdata \
+    && apt-get install -y --no-install-recommends "tzdata=${TZDATA_VERSION}" \
     && ln -snf /usr/share/zoneinfo/Europe/Moscow /etc/localtime \
     && echo Europe/Moscow > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
@@ -32,9 +33,14 @@ COPY check_ha.py ./check_ha.py
 COPY secret.env.example ./secret.env.example
 COPY README.md ./README.md
 
-RUN mkdir -p /app/data /app/logs /app/sound /download-app \
+RUN groupadd --gid 10001 perehomelab \
+    && useradd --uid 10001 --gid 10001 --no-create-home --no-log-init --shell /usr/sbin/nologin perehomelab \
+    && mkdir -p /app/data /app/logs /app/sound /download-app \
+    && chown 10001:10001 /app/data /app/logs /app/sound /download-app \
     && find /app -type d -name __pycache__ -prune -exec rm -rf {} + \
     && find /app -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+
+USER 10001:10001
 
 EXPOSE 8000
 

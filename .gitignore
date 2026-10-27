@@ -23,3 +23,5 @@ static/downloads/*
 *.bak
 *.key
 *.pem
+RELEASE_AUDIT_*.md
+SECURITY_REVIEW_*.md

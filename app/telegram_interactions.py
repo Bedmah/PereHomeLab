@@ -47,13 +47,16 @@ class TelegramInteractions:
 
     async def prompt(self, setting, token, user, message, kind, event=None, action=None, error=None):
         service = self.service
+        private = message['chat'].get('type')=='private'
+        if private:
+            service.profile_ui.cancel(setting,user)
         flow = service.flows.pending(setting['bot_id'], user['id'], kind, event['id'] if event else None)
         if flow:
             service.flows.update(flow['id'], step='retired', done=True)
             service.flows.delete_later(flow['bot_id'], flow['chat_id'], flow['prompt_id'])
         flow = service.flows.create(setting, user['id'], kind, message['chat']['id'],
             event_id=event['id'] if event else None, revision=event['revision'] if event else None,
-            thread_id=message.get('message_thread_id') or setting['thread_id'], data={'action': action})
+            thread_id=None if private else message.get('message_thread_id') or setting['thread_id'], data={'action': action})
         name = html.escape(str(user.get('first_name') or 'Сотрудник')[:100])
         text = (f'<a href="tg://user?id={user["id"]}">{name}</a>, '
                 f'комментарий к вызову «{html.escape(event["device_name"][:300])}».\n'
@@ -106,15 +109,24 @@ class TelegramInteractions:
                     raise ValueError('Запрос устарел')
             elif action in {'claim', 'take', 'release', 'comment'} and len(parts) in {2, 3}:
                 event = service.calls.get(parts[1])
-                delivery = service.store.delivery(parts[1])
+                private = (message.get('chat') or {}).get('type')=='private'
+                if private:
+                    if message['chat'].get('id') != user['id']:
+                        raise ValueError('Это сообщение другого сотрудника')
+                    service.private.eligible(setting,user['id'])
+                delivery = service.private.delivery(parts[1],setting['bot_id'],user['id']) if private else service.store.delivery(parts[1])
                 if (not event or not delivery or delivery['bot_id'] != setting['bot_id']
                         or delivery['area_id'] != setting['area_id']
-                        or delivery['chat_id'] != (message.get('chat') or {}).get('id')
-                        or message.get('message_thread_id') not in {None, delivery['thread_id']}):
+                        or (not private and (delivery['chat_id'] != (message.get('chat') or {}).get('id')
+                            or message.get('message_thread_id') not in {None, delivery['thread_id']}))):
                     raise ValueError('Вызов не найден в этой локации')
                 if delivery['message_id'] is None and delivery['state'] in {'sending', 'uncertain'}:
-                    service.store.update_delivery(event['id'], 'sent', message_id=message['message_id'])
-                    delivery = service.store.delivery(event['id'])
+                    if private:
+                        service.private.update(delivery,'sent',message_id=message['message_id'])
+                        delivery = service.private.delivery(event['id'],setting['bot_id'],user['id'])
+                    else:
+                        service.store.update_delivery(event['id'], 'sent', message_id=message['message_id'])
+                        delivery = service.store.delivery(event['id'])
                 if delivery['message_id'] != message.get('message_id'):
                     raise ValueError('Сообщение не соответствует вызову')
                 name = self.identity(setting, user)
@@ -168,8 +180,6 @@ class TelegramInteractions:
                     text='Укажите корпоративный логин и ФИО в личном чате бота.',
                     reply_markup={'inline_keyboard': [[{'text': 'Заполнить профиль', 'url': f"https://t.me/{setting['bot_username']}?start=profile"}]]})
             return True
-        if private:
-            return await service.profile_ui.message(setting, token, user, text)
         reply = message.get('reply_to_message') or {}
         if command in {'/cancel', '/cancel@' + setting['bot_username'].lower()}:
             for pending in service.flows.comments_for_user(setting['bot_id'], user['id'], chat.get('id')):
@@ -177,14 +187,30 @@ class TelegramInteractions:
                     service.flows.update(pending['id'], done=True)
                     await self.finish(token, pending, 'Ввод отменён')
             service.flows.delete_later(setting['bot_id'], chat.get('id'), message.get('message_id'))
+            if private:
+                await service.profile_ui.message(setting,token,user,text)
             return True
-        if not reply.get('message_id'):
+        if private and await service.private.message(setting,token,user,text):
+            return True
+        menus = {service.profile_ui.SHOW,service.profile_ui.EDIT,service.profile_ui.FILL,service.profile_ui.DELETE,service.profile_ui.CANCEL}
+        if private and (command.startswith('/') or text in menus):
+            for pending in service.flows.comments_for_user(setting['bot_id'],user['id'],chat['id']):
+                service.flows.update(pending['id'],done=True)
+                await self.finish(token,pending,'Ввод отменён')
+            return await service.profile_ui.message(setting,token,user,text)
+        if not reply.get('message_id') and not private:
             return False
         flow = service.flows.for_reply(setting['bot_id'], chat.get('id'), reply.get('message_id'))
         if not flow:
             flow = service.flows.for_original_reply(setting['bot_id'], user['id'], chat.get('id'), reply.get('message_id'))
         if not flow:
-            return False
+            if private:
+                pending = service.flows.comments_for_user(setting['bot_id'],user['id'],chat['id'])
+                flow = pending[-1] if pending and not reply.get('message_id') else None
+                if not flow:
+                    return await service.profile_ui.message(setting,token,user,text)
+            else:
+                return False
         if flow['user_id'] != str(user['id']):
             return True
         if message.get('message_thread_id') not in {None, flow['thread_id']}:
@@ -193,6 +219,8 @@ class TelegramInteractions:
             event = service.calls.get(flow['event_id'])
             if not event or event['area_id'] != setting['area_id']:
                 raise ValueError('Локация вызова изменена')
+            if private:
+                service.private.eligible(setting,user['id'])
             name = self.identity(setting, user)
             item = service.calls.comment(flow['event_id'], str(user['id']), name, text,
                 f"{setting['bot_id']}:{chat['id']}:{message['message_id']}")
@@ -202,8 +230,16 @@ class TelegramInteractions:
             service.logger.info('Telegram comment saved: region=%s, event=%s', setting['area_id'], flow['event_id'])
             await self.changed(item, 'comment')
         except ValueError as exc:
-            delivery = service.store.delivery(flow['event_id'])
+            delivery = service.private.delivery(flow['event_id'],setting['bot_id'],user['id']) if private else service.store.delivery(flow['event_id'])
             if delivery and event:
                 original = {'chat': chat, 'message_id': delivery['message_id'], 'message_thread_id': flow['thread_id']}
-                await self.prompt(setting, token, user, original, 'comment', event, error=str(exc))
+                try:
+                    if private:
+                        service.private.eligible(setting,user['id'])
+                    await self.prompt(setting, token, user, original, 'comment', event, error=str(exc))
+                except ValueError:
+                    service.flows.update(flow['id'],done=True)
+                    await self.finish(token,flow,'Доступ ограничен')
+                    if private:
+                        await service.profile_ui.send(token,user,str(exc))
         return True

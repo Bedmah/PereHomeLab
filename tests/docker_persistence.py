@@ -2,6 +2,8 @@
 
 import argparse
 import json
+import os
+from contextlib import ExitStack
 from pathlib import Path
 import subprocess
 import tempfile
@@ -13,13 +15,20 @@ def docker(*args, script=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--image', default='perehomelab:0.1.1')
+    parser.add_argument('--image', default='perehomelab:0.2.0-test')
     args = parser.parse_args()
-    with tempfile.TemporaryDirectory(prefix='perehomelab-docker-check-') as directory:
+    with tempfile.TemporaryDirectory(prefix='perehomelab-docker-check-') as directory, ExitStack() as cleanup:
         root = Path(directory)
         for name in ('data', 'logs', 'sound', 'downloads'):
             (root / name).mkdir()
         (root / 'downloads/Test.exe').write_bytes(b'isolated-test-download')
+        def ownership(uid, gid):
+            docker('run', '--rm', '--network', 'none', '--user', '0', '--entrypoint', 'chown',
+                   '-v', str(root/'data')+':/app/data', '-v', str(root/'logs')+':/app/logs',
+                   '-v', str(root/'sound')+':/app/sound', args.image, '-R', '--no-dereference',
+                   f'{uid}:{gid}', '/app/data', '/app/logs', '/app/sound')
+        cleanup.callback(ownership,os.getuid(),os.getgid())
+        ownership(10001,10001)
         previous_id = None
         for phase in (1, 2):
             options = ['run', '-d', '--network', 'none', '--read-only', '--tmpfs', '/tmp']
@@ -34,7 +43,11 @@ def main():
             try:
                 script = '''
 import base64, json, time, urllib.request, urllib.error
+import os
 from pathlib import Path
+
+assert os.getuid()==10001 and os.getgid()==10001
+assert not os.access('/app/app/main.py',os.W_OK)
 def request(path, data=None, method='GET', headers=None):
     extra={'Authorization':'Basic '+base64.b64encode(b'testadmin:isolated-password').decode()}
     extra.update(headers or {})
@@ -60,6 +73,11 @@ else: raise AssertionError('Admin endpoint accepted invalid credentials')
                 if phase == 1:
                     script += '''
 item=json.loads(request('/api/admin/employees',json.dumps({'login':'docker.test','full_name':'Test Employee'}).encode(),'POST',{'Content-Type':'application/json'}))['item']
+import sqlite3
+with sqlite3.connect('/app/data/press_history.db') as connection:
+    connection.execute('INSERT INTO telegram_contacts(bot_id,user_id,area_id) VALUES(?,?,?)',(123,'777','offline'))
+    connection.execute('INSERT INTO telegram_subscriptions(bot_id,user_id,area_id,enabled,start_rowid) VALUES(?,?,?,?,?)',(123,'777','offline',1,0))
+    connection.execute('INSERT INTO telegram_private_outbox(event_id,bot_id,user_id,area_id,state,expires_at) VALUES(?,?,?,?,?,?)',('offline-test',123,'777','offline','uncertain',0))
 request('/api/admin/sounds/persistence.wav', b'RIFF-test', 'POST')
 try:
     request('/api/admin/sounds/too-big.wav',b'', 'POST', {'Content-Length':str(21*1024*1024)})
@@ -76,6 +94,10 @@ assert len(items)==1 and items[0]['id']==EXPECTED
 assert request('/sound/persistence.wav')==b'RIFF-test'
 assert request('/download-app')==b'isolated-test-download'
 assert Path('/app/logs/app.log').stat().st_size>0
+import sqlite3
+with sqlite3.connect('/app/data/press_history.db') as connection:
+    assert connection.execute('SELECT enabled FROM telegram_subscriptions WHERE bot_id=123 AND user_id=?',('777',)).fetchone()[0]==1
+    assert connection.execute('SELECT state FROM telegram_private_outbox WHERE event_id=?',('offline-test',)).fetchone()[0]=='uncertain'
 print('Database, sound, logs and executable survived container recreation')
 '''.replace('EXPECTED', repr(previous_id))
                 output = docker('exec', '-i', container, 'python', '-B', '-', script=script)

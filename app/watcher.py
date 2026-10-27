@@ -15,6 +15,7 @@ from app.config import AppConfig
 from app.ha_client import HomeAssistantClient
 from app.history import HistoryStore
 from app.dates import display_date
+from app.redaction import redact_sensitive
 
 
 @dataclass(frozen=True)
@@ -328,7 +329,7 @@ class HomeAssistantWatcher:
             except Exception as exc:
                 self._logger.exception('Home Assistant watcher failed. Reconnecting.')
                 self.ha_ws_connected = False
-                self.last_error = str(exc)
+                self.last_error = redact_sensitive(str(exc))
                 self.last_error_at = self._now_iso()
                 self.reconnect_count += 1
                 self.last_reconnect_at = self._now_iso()
@@ -401,7 +402,7 @@ class HomeAssistantWatcher:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                self.last_error = str(exc)
+                self.last_error = redact_sensitive(str(exc))
                 self.last_error_at = self._now_iso()
                 self._logger.warning('HA maintenance check failed: %s', exc)
                 await self._broadcast_system('system_status')
@@ -415,7 +416,7 @@ class HomeAssistantWatcher:
                 await self._client.health_check()
             except Exception as exc:
                 self.ha_api_ok = False
-                self.last_error = str(exc)
+                self.last_error = redact_sensitive(str(exc))
                 self.last_error_at = self._now_iso()
                 if self._ha_websocket is not None:
                     await self._ha_websocket.close()
@@ -561,8 +562,8 @@ class HomeAssistantWatcher:
             try:
                 added_count, checkpoint = await self._sync_recent_history()
             except Exception as exc:
-                self.history_sync_error = str(exc)
-                self.last_error = str(exc)
+                self.history_sync_error = redact_sensitive(str(exc))
+                self.last_error = redact_sensitive(str(exc))
                 self.last_error_at = self._now_iso()
                 self._logger.warning('HA history sync failed: %s', exc)
                 await self._broadcast_system('system_status')

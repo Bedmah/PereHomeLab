@@ -18,12 +18,14 @@ from app.telegram_interactions import TelegramInteractions
 from app.dates import display_date
 from app.telegram_profile import TelegramProfile
 from app.rate_limit import InteractionLimiter
+from app.redaction import redact_sensitive
+from app.telegram_private import TelegramPrivate
 
 
 class TelegramError(Exception):
     def __init__(self, message: str, code: int = 0, retryable: bool = False,
                  uncertain: bool = False, retry_after: float = 0) -> None:
-        super().__init__(message)
+        super().__init__(redact_sensitive(message))
         self.code = code
         self.retryable = retryable
         self.uncertain = uncertain
@@ -77,6 +79,7 @@ class TelegramService:
         self.employees = EmployeeStore(config.history_db_path)
         self.calls = CallStore(history, self.employees)
         self.flows = TelegramFlows(self.store)
+        self.private = TelegramPrivate(self)
         self.employees.import_interactions(history)
         self.seen_users = {}
         self.interactions = TelegramInteractions(self)
@@ -117,7 +120,7 @@ class TelegramService:
             with self.store.connect() as connection:
                 connection.execute("UPDATE telegram_outbox SET edit_synced=0,next_attempt=0 WHERE state='sent'")
             self.history.set_runtime_state('telegram_keyboard_version', 'emoji-v3', str(time.time()))
-        self.tasks = [asyncio.create_task(self._supervise()), asyncio.create_task(self._deliver()), asyncio.create_task(self._cleanup())]
+        self.tasks = [asyncio.create_task(self._supervise()), asyncio.create_task(self._deliver()), asyncio.create_task(self._cleanup()), asyncio.create_task(self.private.run())]
 
     async def _cleanup(self):
         async def remove(row):
@@ -225,6 +228,7 @@ class TelegramService:
         if self.config.telegram_enabled and self.store.cipher:
             try:
                 self.store.enqueue(event, self.config.telegram_event_ttl_seconds)
+                self.private.enqueue(event['id'])
             except Exception:
                 self.logger.error('Telegram queue failed for event %s; recovery will retry', event.get('id'))
 
@@ -370,6 +374,8 @@ class TelegramService:
         if not allowed:
             return
         self.remember_user(setting, actor)
+        if (message.get('chat') or {}).get('type')=='private' and (message.get('chat') or {}).get('id')==actor.get('id') and not actor.get('is_bot'):
+            self.private.register(setting,actor)
         if await self.interactions.message(setting, token, message):
             return
         command = str(message.get('text') or '').split(maxsplit=1)[0:1]
@@ -486,7 +492,7 @@ class TelegramService:
             self.store.update_delivery(event['event_id'], 'canceled')
             return
         current = self.calls.details(event['event_id'])
-        if not current or self.calls.assigned(current):
+        if not current or (self.calls.assigned(current) and not self.private.has_copy(event['event_id'],event['bot_id'])):
             self.store.update_delivery(event['event_id'], 'canceled')
             return
         try:

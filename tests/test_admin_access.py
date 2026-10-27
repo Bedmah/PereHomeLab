@@ -194,6 +194,22 @@ class AdminAccessTest(unittest.IsolatedAsyncioTestCase):
         status, second = await self.request('GET','/api/admin/audit?q=Pagination%20marker&page=2')
         self.assertEqual((len(first['items']),len(second['items'])),(30,5))
 
+    async def test_diagnostics_and_legacy_logs_redact_secrets(self):
+        private_url = 'https://operator:private-password@ha.test?access_token=query-secret'
+        with patch.object(self.main,'config',replace(self.main.config,ha_url=private_url)), \
+             patch.object(self.main.ha_client,'health_check',new=AsyncMock(side_effect=RuntimeError(private_url))):
+            status, payload = await self.request('GET','/api/diagnostics',None)
+        self.assertEqual(status,200)
+        self.assertNotIn('private-password',json.dumps(payload))
+        self.assertNotIn('query-secret',json.dumps(payload))
+        logs = self.root/'logs'; logs.mkdir(exist_ok=True)
+        (logs/'app.log').write_text('[ERROR] '+private_url+' Authorization: Bearer legacy-secret',encoding='utf-8')
+        with patch.object(self.main,'PROJECT_ROOT',self.root):
+            status, payload = await self.request('GET','/api/admin/logs','general')
+        self.assertEqual(status,200)
+        for secret in ('private-password','query-secret','legacy-secret'):
+            self.assertNotIn(secret,json.dumps(payload))
+
     async def test_shared_support_settings_validation_permissions_and_persistence(self):
         status, _ = await self.request('GET','/api/admin/settings')
         self.assertEqual(status,403)
@@ -330,10 +346,115 @@ class AdminAccessTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.main.telegram.employees.get(item['id'])['blocked'], False)
         status, payload = await self.request('GET','/api/admin/employees?area_id=spb')
         self.assertEqual(status, 200)
-        self.assertFalse(payload['items'][0]['area_enabled'])
+        self.assertFalse(next(employee for employee in payload['items'] if employee['id']==item['id'])['area_enabled'])
         with self.assertRaises(ValueError):
             self.main.telegram.interactions.identity({'area_id':'spb'},{'id':123})
         self.assertTrue(self.main.telegram.interactions.identity({'area_id':'msk'},{'id':123}))
+
+    async def test_regional_profile_edit_preserves_protected_fields(self):
+        employees = self.main.telegram.employees
+        item = employees.observe({'id':98761,'first_name':'Local'},'spb')
+        employees.observe({'id':98761,'first_name':'Local'},'msk')
+        employees.update(item['id'],'initial.employee','Initial Name',True,['spb'],'98761','general',False)
+        path = f'/api/admin/employees/{item["id"]}/profile'
+        data = {'area_id':'spb','login':'regional.employee','full_name':'Regional Name','profile_locked':True}
+        with patch.object(self.main,'broadcast_call_change',new=AsyncMock()) as broadcast:
+            status, payload = await self.request('PUT',path,data=data)
+        self.assertEqual(status,200)
+        updated = payload['item']
+        self.assertEqual((updated['login'],updated['full_name'],updated['profile_locked']),
+                         ('regional.employee','Regional Name',True))
+        self.assertEqual((updated['blocked'],updated['allowed_areas'],updated['telegram_user_id']),
+                         (True,['spb'],'98761'))
+        broadcast.assert_awaited_once()
+        for field,value in [('blocked',False),('allowed_areas',None),('telegram_user_id','123'),('telegram_username','forged')]:
+            status, _ = await self.request('PUT',path,data={**data,field:value})
+            self.assertEqual(status,422,field)
+        status, _ = await self.request('PUT',path,data={**data,'profile_locked':False})
+        self.assertEqual(status,200)
+        self.assertFalse(employees.get(item['id'])['profile_locked'])
+        status, payload = await self.request('GET','/api/admin/audit?q=regional.employee')
+        self.assertTrue(payload['total'])
+        self.assertTrue(all(entry['area_ids']==['spb'] for entry in payload['items']))
+
+    async def test_regional_profile_edit_requires_own_area_membership(self):
+        employees = self.main.telegram.employees
+        foreign = employees.observe({'id':98762,'first_name':'Foreign'},'msk')
+        path = f'/api/admin/employees/{foreign["id"]}/profile'
+        data = {'area_id':'spb','login':'forbidden.change','full_name':'Forbidden','profile_locked':True}
+        status, _ = await self.request('PUT',path,data=data)
+        self.assertEqual(status,404)
+        status, _ = await self.request('PUT',path,data={**data,'area_id':'msk'})
+        self.assertEqual(status,403)
+        status, _ = await self.request('PUT','/api/admin/employees/missing/profile',data=data)
+        self.assertEqual(status,404)
+        self.assertEqual(employees.get(foreign['id'])['full_name'],'Foreign')
+
+    async def test_private_subscription_api_permissions_and_sticky_revocation(self):
+        from cryptography.fernet import Fernet
+        employees = self.main.telegram.employees
+        employee = employees.observe({'id':98801,'first_name':'Confirmed Person'},'spb')
+        employees.observe({'id':98801,'first_name':'Confirmed Person'},'msk')
+        employee = employees.update(employee['id'],'confirmed.person','Confirmed Person',False,None,'98801','admin',True)
+        store = self.main.telegram.store
+        with patch.object(store,'cipher',Fernet(Fernet.generate_key())):
+            store.save('spb',True,'333333:'+('x'*32),{'id':333333,'username':'offline_spb_bot'})
+            store.save('msk',True,'444444:'+('x'*32),{'id':444444,'username':'offline_msk_bot'})
+            for setting in store.settings():
+                self.main.telegram.private.register(setting,{'id':98801})
+            path=f'/api/admin/employees/{employee["id"]}'
+            status, _ = await self.request('PUT',path+'/subscriptions/spb',data={'enabled':True})
+            self.assertEqual(status,200)
+            status, _ = await self.request('PUT',path+'/subscriptions/msk',data={'enabled':True})
+            self.assertEqual(status,403)
+            status, _ = await self.request('PUT',path+'/subscriptions/msk','general',{'enabled':True})
+            self.assertEqual(status,200)
+            status, payload = await self.request('GET',path+'/detail?area_id=spb')
+            self.assertEqual([item['area_id'] for item in payload['locations']],['spb'])
+            self.assertTrue(payload['locations'][0]['enabled'])
+            status, _ = await self.request('GET',path+'/detail')
+            self.assertEqual(status,403)
+            status, payload = await self.request('GET',path+'/activity?area_id=spb&kind=subscriptions')
+            self.assertEqual(payload['total'],1)
+            self.assertTrue(all(item['area_id']=='spb' for item in payload['items']))
+            status, payload = await self.request('GET','/api/admin/employees?area_id=spb&q=confirmed.person&subscribed=true&confirmed=true')
+            self.assertEqual(payload['total'],1)
+            status, _ = await self.request('PUT',path+'/profile',data={'area_id':'spb','login':'confirmed.person','full_name':'Confirmed Person','profile_locked':False})
+            self.assertEqual(status,200)
+            self.assertFalse(self.main.telegram.private.state(self.main.telegram._setting('spb'),98801)['enabled'])
+            status, _ = await self.request('PUT',path+'/subscriptions/spb',data={'enabled':True})
+            self.assertEqual(status,400)
+
+    async def test_employee_activity_is_scoped_paged_and_sanitized(self):
+        from datetime import datetime
+        employees = self.main.telegram.employees
+        employee = employees.observe({'id':98802,'first_name':'History Person'},'spb')
+        employees.observe({'id':98802,'first_name':'History Person'},'msk')
+        now=datetime.now().isoformat(timespec='microseconds')
+        for area in ('spb','msk'):
+            event_id='employee-activity-'+area
+            self.main.history.add_press(event_id,'activity-button-'+area,'Room',now,now,area,area)
+            self.main.telegram.calls.change(event_id,'assign','98802','History Person',receipt='activity-'+area)
+            self.main.telegram.calls.comment(event_id,'98802','History Person','foreign-note' if area=='msk' else 'local-note','comment-'+area)
+        path=f'/api/admin/employees/{employee["id"]}/activity'
+        status, payload = await self.request('GET',path+'?area_id=spb&kind=calls')
+        self.assertEqual(status,200)
+        self.assertEqual(payload['total'],2)
+        self.assertNotIn('foreign-note',json.dumps(payload))
+        self.assertIn('local-note',json.dumps(payload))
+        status, _ = await self.request('GET',path+'?area_id=msk')
+        self.assertEqual(status,403)
+        status, payload = await self.request('GET',path+'?kind=calls','general')
+        self.assertEqual(payload['total'],4)
+        with employees.connect() as connection:
+            connection.executemany('INSERT INTO employee_audit(employee_id,actor,action,details,created_at) VALUES(?,?,?,?,?)',
+                [(employee['id'],'test','admin_updated',json.dumps({'new':{'full_name':'History Person'},'hidden':'not-for-ui'}),now)]*25)
+        status, first = await self.request('GET',path+'?area_id=spb&kind=profile')
+        status, second = await self.request('GET',path+'?area_id=spb&kind=profile&page=2')
+        self.assertEqual(len(first['items']),20)
+        self.assertTrue(second['items'])
+        self.assertNotIn('not-for-ui',json.dumps(first))
+        self.assertFalse({item['sequence'] for item in first['items']} & {item['sequence'] for item in second['items']})
 
     async def test_audit_does_not_store_request_secrets(self):
         self.main.users.create_user('password-test','test-password','location',['spb'])

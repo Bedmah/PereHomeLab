@@ -3,6 +3,12 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from app.config import PROJECT_ROOT
+from app.redaction import redact_sensitive
+
+
+class RedactingFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        return redact_sensitive(super().format(record))
 
 
 def _safe_file_handler(path: Path, formatter: logging.Formatter) -> RotatingFileHandler | None:
@@ -21,9 +27,10 @@ def configure_logging() -> logging.Logger:
 
     logger = logging.getLogger('pere_home_lab')
     logger.setLevel(logging.INFO)
+    logger.propagate = False
     logger.handlers.clear()
 
-    formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s', '%Y-%m-%d %H:%M:%S')
+    formatter = RedactingFormatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s', '%Y-%m-%d %H:%M:%S')
 
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
@@ -33,9 +40,14 @@ def configure_logging() -> logging.Logger:
     if app_handler:
         logger.addHandler(app_handler)
 
+    error_logger = logging.getLogger('uvicorn.error')
+    error_logger.handlers = [console_handler] + ([app_handler] if app_handler else [])
+    error_logger.propagate = False
+
     access_logger = logging.getLogger('uvicorn.access')
     access_logger.handlers.clear()
     access_logger.setLevel(logging.INFO)
+    access_logger.propagate = False
 
     access_handler = _safe_file_handler(log_dir / 'access.log', formatter)
     if access_handler:

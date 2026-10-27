@@ -53,7 +53,15 @@ def main():
                         'enabled':False,'token_configured':False,'setup_until':0,'chat_id':None,'setups':[],
                         'delivery_stats':{}} for area in visible], 'key_ready':True,'enabled':False,'event_ttl_seconds':300}
                 elif '/employees' in path:
-                    if request.method == 'GET':
+                    if path.endswith('/detail'):
+                        payload = {'item':{'id':'test-employee','display_name':'Иван Петров · i.petrov','full_name':'Иван Петров',
+                            'login':'i.petrov','blocked':False,'allowed_areas':None,'area_enabled':True},'locations':[]}
+                    elif path.endswith('/activity'):
+                        payload = {'items':[],'total':0,'page':1,'total_pages':1}
+                    elif path.endswith('/profile') and request.method == 'PUT':
+                        data = request.post_data_json
+                        payload = {'item':{**data,'telegram_user_id':'91','display_name':data['full_name']+' · '+data['login'],'profile_complete':True}}
+                    elif request.method == 'GET':
                         payload = {'items':[{'id':'test-employee','display_name':'Иван Петров · i.petrov','full_name':'Иван Петров',
                             'login':'i.petrov','blocked':False,'allowed_areas':None,'area_enabled':True}],
                             'page':1,'total':1,'total_pages':1}
@@ -93,6 +101,9 @@ def main():
                 page.locator('#telegramRegionList h3').filter(has_text='Москва').wait_for()
             page.get_by_role('button',name='Сотрудники',exact=True).click()
             page.locator('.employee-list article').wait_for()
+            assert page.locator('.employee-list input').count()==0
+            page.locator('.employee-row').first.click()
+            page.locator('.employee-list .telegram-region-card').wait_for()
             checkbox = page.get_by_label('Разрешить действия в боте этой локации',exact=True)
             checkbox.uncheck()
             page.locator('.employee-list').get_by_text('Сохранено',exact=True).wait_for()
@@ -100,7 +111,19 @@ def main():
             if role=='location':
                 assert not page.locator('#allEmployeeProfiles').is_visible()
                 assert not page.locator('.employee-create').is_visible()
-                assert not page.locator('.employee-list input[type="text"]').count()
+                employee = page.locator('.employee-list article').first
+                assert employee.get_by_label('Корпоративный логин',exact=True).is_editable()
+                assert employee.get_by_label('ФИО',exact=True).is_editable()
+                assert not employee.get_by_label('Telegram ID',exact=True).is_editable()
+                assert not employee.get_by_label('Профиль заблокирован',exact=True).is_visible()
+                assert not employee.get_by_label('Доступ ко всем локациям',exact=True).is_visible()
+                employee.get_by_label('Корпоративный логин',exact=True).fill('updated.employee')
+                employee.get_by_label('ФИО',exact=True).fill('Updated Employee')
+                employee.get_by_label('Запретить изменение и удаление данных в боте',exact=True).check()
+                page.locator('.employee-list').get_by_role('button',name='Сохранить',exact=True).click()
+                page.locator('.employee-list .telegram-feedback').last.filter(has_text='Сохранено').wait_for()
+                saved = [json.loads(body) for method,path,body in requests if method=='PUT' and path.endswith('/profile')][-1]
+                assert saved=={'area_id':'spb','login':'updated.employee','full_name':'Updated Employee','profile_locked':True}
             else:
                 page.get_by_role('button',name='Администраторы',exact=True).click()
                 page.locator('#adminUserList .admin-user-card').first.wait_for()

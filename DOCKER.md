@@ -1,11 +1,14 @@
-# Docker: версия 0.1.3
+# Docker: PereHomeLab 0.2.0
 
-Этот вариант собирает текущие исходники локально, без публикации образа.
+Образы: `bedmah/perehomelab:0.2.0` и `bedmah/perehomelab:latest`. Команды выполняются в отдельной папке развёртывания с вашим `secret.env`. При обновлении сначала остановите прежний контейнер и сделайте защищённую резервную копию данных.
 
 ```bash
-docker build -t perehomelab:local .
+docker pull bedmah/perehomelab:0.2.0
 mkdir -p data logs sound downloads
 chmod 600 secret.env
+docker run --rm --network none --user 0 --entrypoint chown \
+  -v "$(pwd)/data:/app/data" -v "$(pwd)/logs:/app/logs" -v "$(pwd)/sound:/app/sound" \
+  bedmah/perehomelab:0.2.0 -R --no-dereference 10001:10001 /app/data /app/logs /app/sound
 docker run -d --name perehomelab --restart unless-stopped \
   -p 8000:8000 --env-file secret.env \
   -e HISTORY_DB_PATH=/app/data/press_history.db \
@@ -15,15 +18,19 @@ docker run -d --name perehomelab --restart unless-stopped \
   -v "$(pwd)/logs:/app/logs" \
   -v "$(pwd)/sound:/app/sound" \
   -v "$(pwd)/downloads:/download-app:ro" \
-  perehomelab:local
+  bedmah/perehomelab:0.2.0
 ```
+
+Приложение запускается от UID/GID `10001:10001`, без root. Команда `chown` выше используется только для подготовки каталогов и само приложение не запускает. При обновлении со старого root-образа сначала остановите старый контейнер и сделайте резервную копию, затем выполните её для прежних `data`, `logs`, `sound`. Файлы, история, настройки и ключи не удаляются. `app`/`downloads` остаётся доступным только на чтение и должен разрешать чтение EXE пользователю 10001. Новых обязательных параметров ENV нет; формат БД и Fernet не меняется. Не обходите эту подготовку постоянным запуском сервиса через `--user 0`.
+
+Внутри образа версия `tzdata` закреплена через `TZDATA_VERSION`. При плановом обновлении пакета измените ARG и повторите сборку/проверки; для локальной сборки можно передать `--build-arg TZDATA_VERSION=ПРОВЕРЕННАЯ_ВЕРСИЯ`.
 
 Откройте `http://SERVER_IP:8000`. Для внешнего порта 80 замените `-p 8000:8000` на `-p 80:8000`.
 
 В `secret.env` заполните параметры из `secret.env.example`, в том числе `HA_URL`, `HA_TOKEN`, пароль администратора и `TELEGRAM_ENCRYPTION_KEY`. Ключ Fernet создаётся один раз:
 
 ```bash
-docker run --rm --entrypoint python perehomelab:local -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+docker run --rm --entrypoint python bedmah/perehomelab:0.2.0 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
 Сохраните результат в `TELEGRAM_ENCRYPTION_KEY`. При обновлении или переносе используйте **тот же ключ**: иначе сохранённые токены ботов не расшифруются. Не меняйте его при каждом запуске.
@@ -59,8 +66,8 @@ docker run --rm --entrypoint python perehomelab:local -c "from cryptography.fern
 ```bash
 docker run --rm --network none --read-only --tmpfs /tmp \
   -v "$(pwd)/tests:/app/tests:ro" --entrypoint python \
-  perehomelab:local -B -m unittest discover -s tests -q
-python3 tests/docker_persistence.py --image perehomelab:local
+  bedmah/perehomelab:0.2.0 -B -m unittest discover -s tests -q
+python3 tests/docker_persistence.py --image bedmah/perehomelab:0.2.0
 ```
 
 Вторая проверка создаёт временные каталоги и два последовательных контейнера без сети: проверяет сохранность БД, загруженного звука, логов и скачивания EXE, а также отказ в загрузке слишком большого файла. Рабочие каталоги и секреты не используются.

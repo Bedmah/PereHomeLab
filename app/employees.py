@@ -27,6 +27,7 @@ class EmployeeStore:
                     employee_id TEXT NOT NULL, area_id TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
                     PRIMARY KEY(employee_id, area_id)
                 );
+                CREATE INDEX IF NOT EXISTS idx_employee_audit_person ON employee_audit(employee_id,created_at,id);
             ''')
             columns = {row['name'] for row in connection.execute('PRAGMA table_info(employees)')}
             for name, definition in [('profile_complete', 'INTEGER NOT NULL DEFAULT 1'),
@@ -194,7 +195,7 @@ class EmployeeStore:
 
     def update(self, employee_id: str, login: str, full_name: str, blocked: bool,
                allowed_areas: list[str] | None, telegram_user_id: str | None, actor: str,
-               profile_locked: bool | None = None) -> dict:
+               profile_locked: bool | None = None, *, profile_only: bool = False) -> dict:
         user_id = self.clean_user_id(telegram_user_id)
         now = datetime.now().isoformat(timespec='microseconds')
         try:
@@ -203,6 +204,10 @@ class EmployeeStore:
                 old = connection.execute('SELECT * FROM employees WHERE id = ?', (employee_id,)).fetchone()
                 if not old:
                     raise KeyError(employee_id)
+                if profile_only:
+                    blocked = bool(old['blocked'])
+                    allowed_areas = json.loads(old['allowed_areas']) if old['allowed_areas'] is not None else None
+                    user_id = old['telegram_user_id']
                 complete = bool(login.strip() or old['profile_complete'])
                 if complete:
                     login, full_name = self.validate(login, full_name)
@@ -258,7 +263,8 @@ class EmployeeStore:
             connection.execute('INSERT INTO employee_audit(employee_id,actor,action,details,created_at) VALUES(?,?,?,?,?)',
                 (employee_id,actor,'area_access',json.dumps({'area_id':area_id,'enabled':enabled}),datetime.now().isoformat(timespec='seconds')))
 
-    def page(self, query: str = '', page: int = 1, page_size: int = 20, area_id: str | None = None) -> dict:
+    def page(self, query: str = '', page: int = 1, page_size: int = 20, area_id: str | None = None,
+             confirmed: bool | None = None, subscribed: bool | None = None) -> dict:
         with self.connect() as connection:
             if area_id:
                 rows = connection.execute('''SELECT employees.*,employee_regions.enabled AS area_enabled
@@ -266,7 +272,17 @@ class EmployeeStore:
                     WHERE employee_regions.area_id=? ORDER BY full_name COLLATE NOCASE''', (area_id,)).fetchall()
             else:
                 rows = connection.execute('SELECT * FROM employees ORDER BY full_name COLLATE NOCASE').fetchall()
+            subscribers = set()
+            if connection.execute("SELECT 1 FROM sqlite_master WHERE name='telegram_subscriptions'").fetchone():
+                subscribers = {row['user_id'] for row in connection.execute(
+                    'SELECT user_id FROM telegram_subscriptions WHERE enabled=1 AND (? IS NULL OR area_id=?)',(area_id,area_id))}
         items = [self.public(row) for row in rows]
+        for item in items:
+            item['subscribed'] = item['telegram_user_id'] in subscribers
+        if confirmed is not None:
+            items = [item for item in items if item['profile_locked']==confirmed]
+        if subscribed is not None:
+            items = [item for item in items if item['subscribed']==subscribed]
         term = query.strip().casefold()
         if term.startswith('@'):
             term = term[1:]
@@ -283,3 +299,48 @@ class EmployeeStore:
         for item in items:
             item['created_at_display'] = display_date(item['created_at'])
         return items
+
+    def activity(self, employee_id, areas=None, page=1, kind=''):
+        employee = self.get(employee_id)
+        scope = '' if areas is None else ' AND h.area_id IN ('+','.join('?' for _ in areas)+')'
+        profile_scope = '' if areas is None else " AND (json_extract(CASE WHEN json_valid(details) THEN details ELSE '{}' END,'$.area_id') IS NULL OR json_extract(CASE WHEN json_valid(details) THEN details ELSE '{}' END,'$.area_id') IN ("+','.join('?' for _ in areas)+'))'
+        query = '''SELECT a.created_at,a.action,a.actor_name AS actor,a.body AS details,h.id AS event_id,
+                h.device_name,h.area_id,h.area_name,'calls' AS kind,a.id AS sequence FROM call_actions a
+                JOIN press_history h ON h.id=a.event_id WHERE a.actor_user_id=?'''+scope+'''
+            UNION ALL SELECT created_at,action,actor,details,NULL,NULL,
+                json_extract(CASE WHEN json_valid(details) THEN details ELSE '{}' END,'$.area_id'),NULL,
+                CASE WHEN action IN ('private_subscribed','private_unsubscribed') THEN 'subscriptions' ELSE 'profile' END,id
+                FROM employee_audit WHERE employee_id=?'''+profile_scope
+        params = [employee['telegram_user_id'],*(areas or []),employee_id,*(areas or [])]
+        selected = 'SELECT * FROM ('+query+') WHERE (?=\'\' OR kind=?)'
+        with self.connect() as connection:
+            total = connection.execute('SELECT COUNT(*) FROM ('+selected+')',(*params,kind,kind)).fetchone()[0]
+            rows = connection.execute(selected+' ORDER BY created_at DESC,kind DESC,sequence DESC LIMIT 20 OFFSET ?',
+                (*params,kind,kind,(page-1)*20)).fetchall()
+        labels = {'assign':'Пошёл','claim':'Пошёл','takeover':'Сменил ответственного','release':'Отменил принятие','comment':'Добавил комментарий',
+            'profile_saved':'Сохранил профиль','discovered':'Обнаружен в Telegram','admin_created':'Сотрудник добавлен',
+            'admin_updated':'Профиль изменён','self_cleared':'Корпоративные данные удалены',
+            'area_access':'Доступ к боту изменён','private_subscribed':'Подписка включена','private_unsubscribed':'Подписка отключена'}
+        items = []
+        for row in rows:
+            item = dict(row); item['title'] = labels.get(item['action'],'Настройки сотрудника изменены')
+            item['created_at_display'] = display_date(item['created_at'])
+            if item['kind']!='calls':
+                try:
+                    data = json.loads(item['details'])
+                except (ValueError,TypeError):
+                    data = {}
+                if not isinstance(data,dict):
+                    data = {}
+                parts = []
+                for field,label in [('login','Логин'),('full_name','ФИО'),('profile_locked','Подтверждён')]:
+                    before,after = (data.get('old') or {}).get(field),(data.get('new') or data).get(field)
+                    if after is not None and before!=after:
+                        parts.append(label+': '+(str(after) if field!='profile_locked' else ('да' if after else 'нет')))
+                if 'enabled' in data:
+                    parts.append('Разрешён' if data['enabled'] else 'Ограничен')
+                if data.get('reason'):
+                    parts.append(str(data['reason']))
+                item['details'] = ' · '.join(parts)
+            items.append(item)
+        return {'items':items,'total':total,'page':page,'total_pages':max(1,(total+19)//20)}

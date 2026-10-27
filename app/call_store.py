@@ -22,6 +22,7 @@ class CallStore:
                     actor_user_id TEXT,actor_name TEXT NOT NULL,body TEXT NOT NULL,created_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_call_actions_event ON call_actions(event_id,id);
+                CREATE INDEX IF NOT EXISTS idx_call_actions_actor ON call_actions(actor_user_id,created_at,id);
                 CREATE TABLE IF NOT EXISTS call_comments (
                     id TEXT PRIMARY KEY,event_id TEXT NOT NULL,author_user_id TEXT NOT NULL,
                     author_name TEXT NOT NULL,body TEXT NOT NULL,created_at TEXT NOT NULL,dedupe_key TEXT UNIQUE

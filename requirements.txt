@@ -3,4 +3,4 @@ uvicorn[standard]==0.52.1
 python-dotenv==1.2.2
 websockets==17.0.1
 requests==2.34.2
-cryptography==47.0.0
+cryptography==50.0.2

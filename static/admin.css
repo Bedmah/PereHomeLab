@@ -78,6 +78,25 @@
 .admin-page .danger-button { color: #ffbac3; }
 .global-settings-form { display: grid; gap: 14px; max-width: 720px; }
 .global-settings-form button { justify-self: start; }
+.employee-summary { min-width: 0; }
+.admin-page .employee-row { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 16px; width: 100%; padding: 14px 18px; text-align: left; }
+.employee-row h3 { margin: 0 0 4px; overflow-wrap: anywhere; }
+.employee-row .telegram-meta { display: block; margin: 0; }
+.employee-badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.admin-page .employee-filters { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
+.employee-state { padding: 3px 9px; border-radius: 7px; background: #17283d; color: #bcd5f2; font-size: 13px; }
+.employee-state.restricted { color: #ffc2c7; }
+.employee-extras { display: grid; gap: 18px; }
+.employee-section { min-width: 0; padding: 18px; border: 1px solid #334861; border-radius: 12px; background: #142438; }
+.employee-subscription { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid #2d4058; }
+.employee-subscription strong, .employee-subscription small, .employee-activity small { display: block; overflow-wrap: anywhere; }
+.employee-subscription small, .employee-activity small { color: #a8bdd4; font-size: 13px; }
+.employee-activity { list-style: none; padding: 0; margin: 14px 0 0; display: grid; gap: 12px; }
+.employee-activity li { min-width: 0; padding: 12px; border-left: 2px solid #486587; background: #101e30; border-radius: 6px; }
+.employee-activity p { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.employee-section .employee-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.employee-section .employee-tools select { flex: 1 1 180px; }
+@media (max-width: 600px) { .admin-page .employee-row, .admin-page .employee-filters { grid-template-columns: minmax(0,1fr); gap: 10px; } .employee-badges { justify-content: flex-start; } }
 .admin-page .admin-support { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; padding: 10px; flex: 0 0 44px; }
 .admin-support svg { width: 24px; height: 24px; }
 .login-actions { display: flex; justify-content: center; gap: 12px; margin-top: 24px; }
