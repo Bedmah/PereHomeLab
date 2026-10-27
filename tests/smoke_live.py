@@ -98,7 +98,9 @@ def main() -> None:
     _, download_headers = fetch(args.url, "/download-app")
     assert download_headers.get("content-type") == "application/octet-stream"
 
-    fetch(args.url, "/admin", expected=401)
+    login_page, _ = fetch(args.url, "/admin")
+    assert b"adminLoginForm" in login_page
+    fetch(args.url, '/api/admin/me', expected=401)
     admin_page, _ = fetch(args.url, "/admin", auth=auth)
     assert b"admin.js" in admin_page
     for path in (
@@ -108,6 +110,7 @@ def main() -> None:
         "/api/admin/logs",
         "/api/admin/users",
         "/api/admin/login-logs",
+        "/api/admin/audit",
     ):
         fetch_json(args.url, path, auth=auth)
 

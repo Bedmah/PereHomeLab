@@ -93,7 +93,7 @@ class CallStore:
             assigned = self.assigned(row)
             if assigned and action in {'assign', 'release', 'takeover'}:
                 if not allow_reassign and row['acknowledged_user_id'] != str(user_id):
-                    raise ValueError('В этом регионе менять ответственного может только принявший вызов')
+                    raise ValueError('В этой локации менять ответственного может только принявший вызов')
             if action == 'assign':
                 if assigned and row['acknowledged_user_id'] == str(user_id):
                     return None

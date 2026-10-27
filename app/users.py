@@ -1,4 +1,5 @@
 import hashlib
+import json
 import secrets
 import sqlite3
 from datetime import datetime
@@ -16,6 +17,7 @@ class UserStore:
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self._db_path)
         connection.row_factory = sqlite3.Row
+        connection.create_function('casefold',1,lambda value: str(value or '').casefold(),deterministic=True)
         return connection
 
     def _init_db(self) -> None:
@@ -33,6 +35,12 @@ class UserStore:
                 )
                 '''
             )
+            columns = {row['name'] for row in connection.execute('PRAGMA table_info(admin_users)')}
+            if 'allowed_areas' not in columns:
+                connection.execute('ALTER TABLE admin_users ADD COLUMN allowed_areas TEXT')
+            connection.execute('''CREATE TABLE IF NOT EXISTS admin_actions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL,
+                action TEXT NOT NULL, target TEXT NOT NULL, created_at TEXT NOT NULL)''')
             connection.execute(
                 '''
                 CREATE TABLE IF NOT EXISTS admin_login_log (
@@ -104,7 +112,7 @@ class UserStore:
         with self._lock, self._connect() as connection:
             row = connection.execute(
                 '''
-                SELECT username, password_hash, role, is_active
+                SELECT username, password_hash, role, is_active, allowed_areas
                 FROM admin_users
                 WHERE username = ?
                 ''',
@@ -119,33 +127,43 @@ class UserStore:
                 'UPDATE admin_users SET last_login_at = ?, updated_at = ? WHERE username = ?',
                 (now, now, username),
             )
-            return {'username': row['username'], 'role': row['role']}
+            return {'username': row['username'], 'role': row['role'],
+                    'allowed_areas': json.loads(row['allowed_areas'] or '[]') if row['role'] == 'location' else None}
 
     def list_users(self) -> list[dict]:
         with self._lock, self._connect() as connection:
             rows = connection.execute(
                 '''
-                SELECT username, role, is_active, created_at, updated_at, last_login_at
+                SELECT username, role, allowed_areas, is_active, created_at, updated_at, last_login_at
                 FROM admin_users
                 ORDER BY role DESC, username COLLATE NOCASE
                 '''
             ).fetchall()
-        return [dict(row) | {'is_active': bool(row['is_active'])} for row in rows]
+        return [self.public_user(row) for row in rows]
 
-    def create_user(self, username: str, password: str) -> dict:
+    @staticmethod
+    def public_user(row) -> dict:
+        return dict(row) | {'is_active': bool(row['is_active']),
+            'allowed_areas': json.loads(row['allowed_areas'] or '[]') if row['role'] == 'location' else None}
+
+    def create_user(self, username: str, password: str, role: str = 'admin', allowed_areas: list[str] | None = None) -> dict:
         clean_username = username.strip()
         if not clean_username:
             raise ValueError('Имя пользователя не заполнено')
+        if len(clean_username) > 100 or any(char in clean_username for char in '/:') or any(ord(char) < 32 for char in clean_username):
+            raise ValueError('Некорректный логин')
+        if role not in {'admin', 'location'}:
+            raise ValueError('Некорректная роль')
         if len(password) < 6:
             raise ValueError('Пароль должен быть не короче 6 символов')
         now = self._now()
         with self._lock, self._connect() as connection:
             connection.execute(
                 '''
-                INSERT INTO admin_users (username, password_hash, role, is_active, created_at, updated_at)
-                VALUES (?, ?, 'admin', 1, ?, ?)
+                INSERT INTO admin_users (username, password_hash, role, allowed_areas, is_active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 1, ?, ?)
                 ''',
-                (clean_username, self.hash_password(password), now, now),
+                (clean_username, self.hash_password(password), role, json.dumps(allowed_areas or []) if role == 'location' else None, now, now),
             )
         return self.get_user(clean_username)
 
@@ -153,7 +171,7 @@ class UserStore:
         with self._lock, self._connect() as connection:
             row = connection.execute(
                 '''
-                SELECT username, role, is_active, created_at, updated_at, last_login_at
+                SELECT username, role, allowed_areas, is_active, created_at, updated_at, last_login_at
                 FROM admin_users
                 WHERE username = ?
                 ''',
@@ -161,7 +179,33 @@ class UserStore:
             ).fetchone()
         if not row:
             raise KeyError(username)
-        return dict(row) | {'is_active': bool(row['is_active'])}
+        return self.public_user(row)
+
+    def credential(self, username: str) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute('SELECT password_hash FROM admin_users WHERE username=?', (username,)).fetchone()
+        return row['password_hash'] if row else None
+
+    def set_access(self, username: str, role: str, allowed_areas: list[str]) -> dict:
+        if role not in {'admin', 'location'}:
+            raise ValueError('Некорректная роль')
+        with self._lock, self._connect() as connection:
+            cursor = connection.execute('''UPDATE admin_users SET role=?, allowed_areas=?, updated_at=?
+                WHERE username=? AND role != 'owner' ''',
+                (role, json.dumps(list(dict.fromkeys(allowed_areas))) if role == 'location' else None, self._now(), username))
+            if not cursor.rowcount:
+                raise KeyError(username)
+        return self.get_user(username)
+
+    def add_action(self, username: str, action: str, target: str) -> None:
+        with self._lock, self._connect() as connection:
+            connection.execute('INSERT INTO admin_actions(username,action,target,created_at) VALUES(?,?,?,?)',
+                (username, action, target, self._now()))
+
+    def actions(self, limit: int = 120) -> list[dict]:
+        with self._lock, self._connect() as connection:
+            return [dict(row) for row in connection.execute(
+                'SELECT username,action,target,created_at FROM admin_actions ORDER BY id DESC LIMIT ?', (limit,))]
 
     def set_password(self, username: str, password: str) -> dict:
         if len(password) < 6:
@@ -177,6 +221,8 @@ class UserStore:
             )
             if cursor.rowcount == 0:
                 raise KeyError(username)
+            if connection.execute("SELECT 1 FROM sqlite_master WHERE name='admin_sessions'").fetchone():
+                connection.execute('DELETE FROM admin_sessions WHERE username=?', (username,))
         return self.get_user(username)
 
     def set_active(self, username: str, is_active: bool) -> dict:
@@ -191,6 +237,8 @@ class UserStore:
             )
             if cursor.rowcount == 0:
                 raise KeyError(username)
+            if not is_active and connection.execute("SELECT 1 FROM sqlite_master WHERE name='admin_sessions'").fetchone():
+                connection.execute('DELETE FROM admin_sessions WHERE username=?', (username,))
         return self.get_user(username)
 
     def delete_user(self, username: str) -> None:
@@ -201,6 +249,8 @@ class UserStore:
             )
             if cursor.rowcount == 0:
                 raise KeyError(username)
+            if connection.execute("SELECT 1 FROM sqlite_master WHERE name='admin_sessions'").fetchone():
+                connection.execute('DELETE FROM admin_sessions WHERE username=?', (username,))
 
     def add_login_log(
         self,

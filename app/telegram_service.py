@@ -204,7 +204,7 @@ class TelegramService:
 
     async def configure(self, area_id: str, enabled: bool, token: str | None) -> None:
         if not self._city(area_id):
-            raise ValueError('Регион не найден')
+            raise ValueError('Локация не найдена')
         if self.store.cipher is None:
             raise ValueError(self.store.key_error)
         token = token.strip() if token else None
@@ -435,7 +435,7 @@ class TelegramService:
 
     @staticmethod
     def message_text(event: dict) -> str:
-        region = html.escape(str(event.get('area_name') or 'Регион')[:100])
+        region = html.escape(str(event.get('area_name') or 'Локация')[:100])
         name = html.escape(str(event.get('device_name') or 'Кнопка')[:300])
         pressed = html.escape(display_date(event.get('pressed_at') or event.get('pressed_at_display')))
         if CallStore.assigned(event):
@@ -521,7 +521,7 @@ class TelegramService:
             return
         setting = self._setting(event['area_id'])
         if not setting or setting['bot_id'] != event['bot_id']:
-            self.store.finish_edit(event['event_id'], error='Бот региона изменён; старое сообщение не обновлено')
+            self.store.finish_edit(event['event_id'], error='Бот локации изменён; старое сообщение не обновлено')
             return
         try:
             await self.api.call(self.store.token(setting), 'editMessageText', chat_id=event['chat_id'],

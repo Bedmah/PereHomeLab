@@ -7,43 +7,48 @@
     <link rel="icon" type="image/png" href="/static/assets/yadro-logo.png" />
     <link rel="stylesheet" href="/static/styles.css?v=0.1.1" />
     <link rel="stylesheet" href="/static/calls.css?v=0.1.1-7" />
+    <link rel="stylesheet" href="/static/admin.css?v=0.1.3-7" />
   </head>
-  <body>
+  <body class="admin-page">
     <main class="screen">
       <header class="top-nav">
         <a class="brand" href="/" aria-label="YADRO — на главную">
           <img class="brand-logo" src="/static/assets/yadro-logo.png" alt="YADRO" />
         </a>
         <div class="hero-metrics">
-          <a class="download-button" href="/">Главная</a>
+          <span id="adminIdentity"></span><a class="download-button" href="/">Главная</a><a id="supportLink" class="download-button admin-support" target="_blank" rel="noopener noreferrer" title="Поддержка" aria-label="Поддержка" hidden><svg aria-hidden="true"><use href="/static/icons.svg#support"/></svg></a><button id="adminLogoutButton" type="button">Выйти</button>
         </div>
       </header>
 
       <section class="hero admin-hero">
         <div class="hero-copy">
-          <div class="kicker">Admin</div>
-          <h1>Админка</h1>
+          <h1>Управление</h1>
         </div>
       </section>
 
+      <div id="adminFeedback" role="status" aria-live="polite"></div>
+      <div class="admin-workspace">
+      <aside class="admin-sidebar">
+      <label class="location-picker">Локация<select id="adminLocationSelect" aria-label="Локация"></select></label>
       <nav class="admin-tabs" aria-label="Разделы админки">
-        <button class="admin-tab active" type="button" data-tab="areas">Регионы</button>
-        <button class="admin-tab" type="button" data-tab="sounds">Звуки</button>
+        <button class="admin-tab active" type="button" data-tab="areas">Настройки локации</button>
         <button class="admin-tab" type="button" data-tab="telegram">Telegram</button>
         <button class="admin-tab" type="button" data-tab="employees">Сотрудники</button>
-        <button class="admin-tab" type="button" data-tab="logs">Логи</button>
+        <button class="admin-tab" type="button" data-tab="sounds">Библиотека звуков</button>
+        <button class="admin-tab global-only" type="button" data-tab="settings">Общие настройки</button>
+        <button class="admin-tab" type="button" data-tab="logs">Журнал</button>
         <button class="admin-tab" type="button" data-tab="profile">Мой пароль</button>
-        <button class="admin-tab owner-only" type="button" data-tab="users">Пользователи</button>
+        <button class="admin-tab global-only" type="button" data-tab="users">Администраторы</button>
       </nav>
+      </aside><div id="adminContent">
 
       <section class="admin-panel admin-tab-panel" data-panel="sounds">
         <div class="panel-head compact">
           <div>
-            <span class="section-label">Sound</span>
             <h2>Библиотека звуков</h2>
           </div>
         </div>
-        <div class="admin-note">Загрузи mp3/wav/ogg файл, потом выбери его в нужном регионе.</div>
+        <div class="admin-note">MP3, WAV или OGG, до 20 МБ. Имена файлов должны быть уникальными.</div>
         <div class="sound-upload">
           <input id="soundFileInput" type="file" accept=".mp3,.wav,.ogg,audio/*" />
           <button id="soundUploadButton" class="mini-button">Загрузить</button>
@@ -62,31 +67,48 @@
       <section class="admin-panel admin-tab-panel active" data-panel="areas">
         <div class="panel-head compact">
           <div>
-            <span class="section-label">Home Assistant</span>
-            <h2>Пространства</h2>
+            <h2 id="adminLocationTitle">Настройки локации</h2>
           </div>
           <button id="adminRefreshButton" class="mini-button">Обновить</button>
         </div>
-        <div class="admin-note">Настрой отображаемое имя региона для пространства HA. Кнопки подтягиваются автоматически из выбранного пространства.</div>
         <div id="adminAreaList" class="admin-area-list"></div>
+      </section>
+
+      <section class="admin-panel admin-tab-panel global-only" data-panel="settings">
+        <div class="panel-head compact"><h2>Поддержка</h2></div>
+        <form id="globalSettingsForm" class="global-settings-form">
+          <label class="admin-field">Ссылка поддержки<input id="supportUrlInput" type="url" maxlength="2048" placeholder="https://support.example.com" autocomplete="off"></label>
+          <p class="admin-note">Одна ссылка для всех локаций. Пустое поле скрывает кнопку.</p>
+          <button class="mini-button" type="submit">Сохранить</button>
+          <p id="globalSettingsStatus" class="admin-save-status" role="status"></p>
+        </form>
       </section>
 
       <section class="admin-panel admin-tab-panel" data-panel="logs">
         <div class="panel-head compact">
           <div>
-            <span class="section-label">Logs</span>
-            <h2>Ошибки сервиса</h2>
+            <h2>Журнал</h2>
           </div>
           <button id="adminLogsRefreshButton" class="mini-button">Обновить</button>
         </div>
-        <div class="admin-note">Последние ошибки Home Assistant и backend из файлов логов.</div>
-        <div id="adminLogList" class="admin-log-list"></div>
+        <form id="auditFilters" class="audit-filters">
+          <label class="admin-field">Поиск<input name="q" type="search" placeholder="Сотрудник, настройка, значение" maxlength="150"></label>
+          <label class="admin-field">Локация<select name="area_id"><option value="">Все доступные</option></select></label>
+          <label class="admin-field">Раздел<select name="category"><option value="">Все разделы</option><option value="location">Локации</option><option value="telegram">Telegram</option><option value="employees">Сотрудники</option><option value="sounds">Звуки</option><option value="history">История</option><option value="users">Администраторы</option><option value="settings">Общие настройки</option><option value="legacy">Старые записи</option></select></label>
+          <label class="admin-field">Кто изменил<select name="actor"><option value="">Все</option></select></label>
+          <label class="admin-field">С даты<input name="date_from" type="date"></label>
+          <label class="admin-field">По дату<input name="date_to" type="date"></label>
+          <button type="reset">Сбросить фильтры</button>
+        </form>
+        <p id="auditStatus" role="status" aria-live="polite"></p>
+        <div id="adminActionList" class="audit-list"></div>
+        <div class="audit-pager"><button id="auditPrev" type="button" aria-label="Предыдущая страница">←</button><span id="auditPage">1 / 1</span><button id="auditNext" type="button" aria-label="Следующая страница">→</button></div>
+        <details id="adminErrors" class="global-only"><summary>Ошибки сервиса</summary><div id="adminLogList" class="admin-log-list"></div></details>
       </section>
 
       <section class="admin-panel admin-tab-panel" data-panel="profile">
         <div class="panel-head compact">
           <div>
-            <span class="section-label">Profile</span>
             <h2>Мой пароль</h2>
           </div>
         </div>
@@ -98,19 +120,20 @@
         <div id="ownPasswordStatus" class="admin-save-status"></div>
       </section>
 
-      <section class="admin-panel admin-tab-panel owner-only" data-panel="users">
+      <section class="admin-panel admin-tab-panel global-only" data-panel="users">
         <div class="panel-head compact">
           <div>
-            <span class="section-label">Access</span>
-            <h2>Пользователи</h2>
+            <h2>Администраторы</h2>
           </div>
           <button id="adminUsersRefreshButton" class="mini-button">Обновить</button>
         </div>
-        <div class="admin-note">Созданные пользователи получают полный доступ к админке, кроме управления учётками.</div>
+        <div class="admin-note">Назначьте роль и доступные локации.</div>
 
-        <div class="admin-user-create">
-          <input id="newAdminUsername" type="text" placeholder="Логин" autocomplete="off" />
-          <input id="newAdminPassword" type="password" placeholder="Пароль" autocomplete="new-password" />
+        <div class="admin-user-create admin-account-create">
+          <label class="admin-field">Логин<input id="newAdminUsername" type="text" placeholder="Логин" autocomplete="off" /></label>
+          <label class="admin-field">Пароль<input id="newAdminPassword" type="password" placeholder="Не короче 6 символов" autocomplete="new-password" /></label>
+          <label class="admin-field new-admin-role">Роль<select id="newAdminRole" aria-label="Роль"><option value="location">Администратор локаций</option><option value="admin">Общий администратор</option></select></label>
+          <div id="newAdminAreas" class="access-areas" aria-label="Доступные локации"></div>
           <button id="createAdminUserButton" class="mini-button" type="button">Создать</button>
         </div>
 
@@ -118,7 +141,6 @@
 
         <div class="panel-head compact login-log-head">
           <div>
-            <span class="section-label">Login</span>
             <h2>Журнал входов</h2>
           </div>
           <button id="adminLoginLogsRefreshButton" class="mini-button">Обновить</button>
@@ -127,16 +149,18 @@
       </section>
       <section class="admin-panel admin-tab-panel" data-panel="telegram">
         <div class="panel-head compact">
-          <div><span class="section-label">Telegram</span><h2>Уведомления</h2></div>
+          <div><h2>Telegram локации</h2></div>
           <button id="telegramRefreshButton" class="mini-button" type="button">Обновить</button>
         </div>
-        <p class="admin-note">Для каждого региона - свой бот и своя тема. Сохраните токен, добавьте бота в группу и отправьте ему команду /setup в нужной теме. Затем подтвердите привязку здесь.</p>
+        <p class="admin-note">Сохраните токен, начните привязку и отправьте /setup боту в нужной теме группы.</p>
         <p id="telegramServiceStatus" class="admin-note" role="status"></p>
         <div id="telegramRegionList" class="telegram-region-list"></div>
       </section>
-    </main>
-    <script src="/static/admin.js?v=0.1.1"></script>
-    <script src="/static/admin-telegram.js?v=0.1.1-3"></script>
-    <script src="/static/admin-employees.js?v=0.1.1-7"></script>
+    </div></div></main>
+    <script src="/static/support-link.js?v=0.1.3-1"></script>
+    <script src="/static/admin.js?v=0.1.3-8"></script>
+    <script src="/static/admin-audit.js?v=0.1.3-2"></script>
+    <script src="/static/admin-telegram.js?v=0.1.3-2"></script>
+    <script src="/static/admin-employees.js?v=0.1.3-3"></script>
   </body>
 </html>

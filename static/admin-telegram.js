@@ -4,6 +4,7 @@
   const refreshButton = document.querySelector('#telegramRefreshButton');
   let loading = false;
   let loaded = false;
+  let requestSequence = 0;
 
   function element(tag, className, text) {
     const node = document.createElement(tag);
@@ -65,7 +66,7 @@
     enabled.type = 'checkbox';
     enabled.checked = item.enabled;
     enabled.disabled = !keyReady;
-    enabledLabel.append(enabled, element('span', '', 'Отправлять уведомления этого региона'));
+    enabledLabel.append(enabled, element('span', '', 'Отправлять уведомления этой локации'));
     const profileLabel = element('label', 'telegram-toggle');
     const requireProfile = element('input');
     requireProfile.type = 'checkbox';
@@ -160,7 +161,7 @@
       await refreshInformation();
     });
     const remove = button('Удалить настройки', async () => {
-      if (!confirm(`Удалить бота и привязку Telegram для региона «${item.display_name}»?`)) return;
+      if (!confirm(`Удалить бота и привязку Telegram для локации «${item.display_name}»?`)) return;
       await request(route, { method: 'DELETE' });
       token.value = '';
       enabled.checked = false;
@@ -174,17 +175,20 @@
   }
 
   async function load() {
-    if (loading) return;
+    const sequence = ++requestSequence;
+    const areaId = selectedAdminArea;
     loading = true;
     refreshButton.disabled = true;
     serviceStatus.textContent = 'Загрузка настроек…';
     try {
       const payload = await request();
+      if (sequence !== requestSequence || areaId !== selectedAdminArea) return;
       serviceStatus.textContent = !payload.key_ready ? payload.key_error
         : !payload.enabled ? 'Telegram отключён через TELEGRAM_ENABLED'
-          : payload.error || `Отдельный маршрут для каждого региона. Срок доставки нового вызова: ${payload.event_ttl_seconds} сек.`;
-      regionList.replaceChildren(...payload.items.map((item) => renderCard(item, payload.key_ready)));
-      if (!payload.items.length) regionList.append(element('p', 'admin-note', 'Сначала добавьте регионы в разделе «Регионы»'));
+          : payload.error || `Отдельный маршрут для каждой локации. Срок доставки нового вызова: ${payload.event_ttl_seconds} сек.`;
+      const items = payload.items.filter((item) => item.area_id === areaId);
+      regionList.replaceChildren(...items.map((item) => renderCard(item, payload.key_ready)));
+      if (!items.length) regionList.append(element('p', 'admin-note', 'Выберите доступную локацию'));
       loaded = true;
     } catch (error) {
       serviceStatus.textContent = error.message;
@@ -196,6 +200,10 @@
 
   refreshButton.addEventListener('click', load);
   document.querySelector('[data-tab="telegram"]').addEventListener('click', () => {
-    if (!loaded) load();
+    if (currentAdmin && !loaded) load();
+  });
+  window.addEventListener('admin-area-changed', () => {
+    loaded = false; regionList.replaceChildren();
+    if (document.querySelector('[data-panel="telegram"]').classList.contains('active')) load();
   });
 })();

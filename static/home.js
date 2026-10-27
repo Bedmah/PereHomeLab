@@ -35,7 +35,7 @@ function createRegionCard(area) {
 
   const label = document.createElement('div');
   label.className = 'region-label';
-  label.textContent = area.area_id ? 'доступно в регионе' : 'доступно всего';
+  label.textContent = area.area_id ? 'доступно в локации' : 'доступно всего';
 
   link.append(title, count, label);
   return link;
@@ -45,6 +45,9 @@ async function loadRegions() {
   try {
     const response = await fetch('/api/areas');
     const payload = await response.json();
+    const supportLink = document.querySelector('#supportLink');
+    supportLink.hidden = !payload.support_url;
+    if (payload.support_url) supportLink.href = payload.support_url;
     const areas = [payload.all || { area_id: '', display_name: 'Все', button_count: 0 }, ...(payload.items || [])];
     const characters = areas.reduce((longest, area) => Math.max(longest, formatButtonAvailability(area).length), 1);
     regionGrid.style.setProperty('--count-characters', String(characters));

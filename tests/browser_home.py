@@ -61,7 +61,7 @@ def main():
             const sizes = nodes.map(node => parseFloat(getComputedStyle(node).fontSize));
             return Math.max(...sizes) - Math.min(...sizes) < .1;
         }''')
-        download = page.locator('.download-button')
+        download = page.get_by_role('link',name='Скачать приложение',exact=True)
         page.mouse.move(0, 0)
         page.wait_for_timeout(220)
         before = download.evaluate('node => getComputedStyle(node).borderTopColor')

@@ -148,7 +148,7 @@ class TelegramTestCase(unittest.IsolatedAsyncioTestCase):
 
     async def test_same_bot_cannot_be_assigned_to_two_regions(self):
         await self.configure()
-        with self.assertRaisesRegex(ValueError, 'другого региона'):
+        with self.assertRaisesRegex(ValueError, 'другой локации'):
             await self.service.configure('msk', True, bot_token())
 
     async def test_existing_webhook_is_not_deleted(self):

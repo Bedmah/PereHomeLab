@@ -3,10 +3,11 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Переговорки · Регионы</title>
+    <title>Переговорки · Локации</title>
     <link rel="icon" type="image/png" href="/static/assets/yadro-logo.png" />
     <link rel="stylesheet" href="/static/styles.css?v=0.1.2-1" />
     <link rel="stylesheet" href="/static/glass.css?v=0.1.2-9" />
+    <link rel="stylesheet" href="/static/navigation.css?v=0.1.3-1" />
   </head>
   <body class="home-page">
     <main class="screen home-screen">
@@ -18,19 +19,22 @@
           <span id="connectionBadge" class="dot wait"></span>
           <span id="statusText">Загрузка</span>
         </div>
-        <a class="download-button top-download" href="/download-app" download>Скачать приложение</a>
+        <nav class="nav-actions" aria-label="Полезные ссылки">
+          <a class="download-button top-download nav-icon-button" href="/download-app" download title="Скачать приложение" aria-label="Скачать приложение"><svg aria-hidden="true"><use href="/static/icons.svg#download"/></svg></a>
+          <a id="supportLink" class="download-button nav-icon-button" target="_blank" rel="noopener noreferrer" title="Поддержка" aria-label="Поддержка" hidden><svg aria-hidden="true"><use href="/static/icons.svg#support"/></svg></a>
+        </nav>
       </header>
 
       <section class="hero home-hero">
         <div class="hero-copy">
-          <div class="kicker">Choose region</div>
-          <h1>Регионы</h1>
+          <div class="kicker">Choose location</div>
+          <h1>Локации</h1>
         </div>
 
       </section>
 
       <section class="region-grid" id="regionGrid"></section>
     </main>
-    <script src="/static/home.js?v=0.1.2-2"></script>
+    <script src="/static/home.js?v=0.1.3-2"></script>
   </body>
 </html>

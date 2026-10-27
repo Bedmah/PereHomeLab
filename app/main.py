@@ -4,23 +4,28 @@ import sqlite3
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
+from urllib.parse import urlsplit
 
 import secrets
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from app.cities import CityStore, slugify
+from app.cities import RESERVED_AREA_SLUGS, CityStore, slugify
 from app.battery import collect_batteries
 from app.config import PROJECT_ROOT, get_live_ack_button_text, get_live_sound_play_seconds, load_config
 from app.ha_client import HomeAssistantClient
 from app.history import HistoryStore
 from app.logging_config import configure_logging
 from app.users import UserStore
+from app.admin_access import require_area, require_global, require_user_control, visible_areas
+from app.admin_sessions import AdminSessions
+from app.admin_audit import AdminAudit, audit_change
 from app.watcher import HomeAssistantWatcher
 from app.telegram_service import TelegramError, TelegramService
 
@@ -45,6 +50,8 @@ history = HistoryStore(config.history_db_path)
 cities = CityStore(config.history_db_path)
 users = UserStore(config.history_db_path)
 users.ensure_owner(config.admin_username, config.admin_password)
+sessions = AdminSessions(users)
+audit = AdminAudit(users)
 ha_client = HomeAssistantClient(config)
 watcher = HomeAssistantWatcher(config, ha_client, history, cities, logger)
 telegram = TelegramService(config, history, cities, logger, watcher.broadcast_acknowledged)
@@ -166,7 +173,7 @@ class TelegramSetupRequest(BaseModel):
     setup_id: str
 
 
-security = HTTPBasic()
+security = HTTPBasic(auto_error=False)
 
 
 def _request_addr(request: Request) -> str | None:
@@ -177,7 +184,32 @@ def _request_user_agent(request: Request) -> str | None:
     return request.headers.get('user-agent')
 
 
-def require_admin(request: Request, credentials: HTTPBasicCredentials = Depends(security)) -> dict:
+def session_credential(user):
+    if user['role'] == 'owner':
+        return sessions.digest(config.admin_username + '\0' + config.admin_password) if user['username'] == config.admin_username else None
+    return users.credential(user['username']) if user['role'] in {'admin','location'} else None
+
+
+def authenticate_admin(username, password):
+    if secrets.compare_digest(username.encode(),config.admin_username.encode()) and secrets.compare_digest(password.encode(),config.admin_password.encode()):
+        return {'username':username,'role':'owner','allowed_areas':None}
+    user = users.authenticate(username,password)
+    return user if user and user['role'] in {'admin','location'} else None
+
+
+def require_admin(request: Request, credentials: HTTPBasicCredentials | None = Depends(security)) -> dict:
+    session = sessions.resolve(request.cookies.get(sessions.cookie_name), session_credential)
+    if session:
+        user, csrf = session
+        if request.method not in {'GET','HEAD','OPTIONS'} and not secrets.compare_digest(request.headers.get('x-csrf-token','').encode(),csrf.encode()):
+            raise HTTPException(403,'Обновите страницу и повторите действие')
+        request.state.csrf_token = csrf
+        request.state.admin = {key:user[key] for key in ('username','role','allowed_areas')}
+        return request.state.admin
+    if credentials is None:
+        raise HTTPException(401, 'Войдите в админку')
+    if sessions.throttled(credentials.username, _request_addr(request)):
+        raise HTTPException(429, 'Слишком много попыток. Повторите через 5 минут', headers={'Retry-After':'300'})
     env_username_ok = secrets.compare_digest(credentials.username.encode('utf-8'), config.admin_username.encode('utf-8'))
     env_password_ok = secrets.compare_digest(credentials.password.encode('utf-8'), config.admin_password.encode('utf-8'))
     if env_username_ok and env_password_ok:
@@ -190,10 +222,11 @@ def require_admin(request: Request, credentials: HTTPBasicCredentials = Depends(
                 _request_user_agent(request),
                 'Вход через главную env-учётку',
             )
-        return {'username': credentials.username, 'role': 'owner'}
+        request.state.admin = {'username': credentials.username, 'role': 'owner', 'allowed_areas': None}
+        return request.state.admin
 
     user = users.authenticate(credentials.username, credentials.password)
-    if user:
+    if user and user['role'] in {'admin', 'location'}:
         if request.url.path == '/admin':
             users.add_login_log(
                 user['username'],
@@ -203,6 +236,7 @@ def require_admin(request: Request, credentials: HTTPBasicCredentials = Depends(
                 _request_user_agent(request),
                 'Вход в админку',
             )
+        request.state.admin = user
         return user
 
     users.add_login_log(
@@ -216,7 +250,6 @@ def require_admin(request: Request, credentials: HTTPBasicCredentials = Depends(
     raise HTTPException(
         status_code=401,
         detail='Invalid admin credentials',
-        headers={'WWW-Authenticate': 'Basic'},
     )
 
 
@@ -230,26 +263,62 @@ def require_owner(admin: dict = Depends(require_admin)) -> dict:
 
 
 class CityUpdateRequest(BaseModel):
-    area_id: str
-    display_name: str
+    area_id: str = Field(min_length=1, max_length=200)
+    display_name: str = Field(max_length=150)
     enabled: bool = True
     color: str = '#60a5fa'
     slug: str | None = None
     sound_path: str | None = None
-    sound_repeat_mode: str = 'seconds'
-    sound_repeat_seconds: float | None = None
-    sound_repeat_count: int | None = None
-    history_sync_hours: float | None = None
-    ack_button_text: str | None = None
+    sound_repeat_mode: Literal['seconds', 'count'] = 'seconds'
+    sound_repeat_seconds: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    sound_repeat_count: int | None = Field(default=None, ge=1)
+    history_sync_hours: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    ack_button_text: str | None = Field(default=None, max_length=100)
 
 
 class HistorySyncRequest(BaseModel):
-    hours: float | None = None
+    hours: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
 
 class UserCreateRequest(BaseModel):
     username: str
     password: str
+    role: str = 'location'
+    allowed_areas: list[str] = Field(default_factory=list, max_length=500)
+
+
+class UserAccessRequest(BaseModel):
+    role: str
+    allowed_areas: list[str] = Field(default_factory=list, max_length=500)
+
+
+class EmployeeAreaRequest(BaseModel):
+    enabled: bool
+
+
+class GlobalSettingsRequest(BaseModel):
+    support_url: str = Field(default='',max_length=2048)
+
+
+def validate_admin_access(admin: dict, role: str, allowed_areas: list[str]) -> None:
+    require_global(admin)
+    if role not in {'admin', 'location'}:
+        raise HTTPException(400, 'Некорректная роль')
+    if admin['role'] != 'owner' and role != 'location':
+        raise HTTPException(403, 'Только главный администратор назначает общих администраторов')
+    known = {city.area_id for city in cities.list(include_disabled=True)}
+    if role == 'location' and (not allowed_areas or not set(allowed_areas) <= known):
+        raise HTTPException(400, 'Выберите хотя бы одну существующую локацию')
+
+
+def manageable_user(admin: dict, username: str) -> dict:
+    require_global(admin)
+    try:
+        target = users.get_user(username)
+    except KeyError:
+        raise HTTPException(404, 'Пользователь не найден') from None
+    require_user_control(admin, target)
+    return target
 
 
 class UserPasswordRequest(BaseModel):
@@ -272,6 +341,19 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title='PereHomeLab', lifespan=lifespan)
+
+
+@app.middleware('http')
+async def audit_admin_changes(request: Request, call_next):
+    response = await call_next(request)
+    admin = getattr(request.state, 'admin', None)
+    if request.url.path.startswith(('/api/admin/', '/admin')):
+        response.headers['Cache-Control'] = 'no-store'
+    if admin and response.status_code < 400 and admin.get('_changes'):
+        await asyncio.to_thread(audit.save, admin['username'], admin['_changes'])
+    return response
+
+
 app.mount('/static', StaticFiles(directory=PROJECT_ROOT / 'static'), name='static')
 app.mount('/sound', StaticFiles(directory=PROJECT_ROOT / 'sound'), name='sound')
 
@@ -300,8 +382,54 @@ async def monitor() -> FileResponse:
 
 
 @app.get('/admin')
-async def admin_page(_: str = Depends(require_admin)) -> FileResponse:
+async def admin_page(request: Request, credentials: HTTPBasicCredentials | None = Depends(security)):
+    try:
+        require_admin(request, credentials)
+    except HTTPException as exc:
+        if exc.status_code != 401:
+            raise
+        return RedirectResponse('/admin/login', status_code=303)
     return FileResponse(PROJECT_ROOT / 'static' / 'admin.html')
+
+
+@app.get('/admin/login')
+async def admin_login_page():
+    return FileResponse(PROJECT_ROOT / 'static' / 'admin-login.html')
+
+
+class AdminLoginRequest(BaseModel):
+    username: str = Field(min_length=1,max_length=100)
+    password: str = Field(min_length=1,max_length=1024)
+
+
+@app.post('/api/admin/auth/login')
+async def admin_login(payload: AdminLoginRequest, request: Request):
+    origin = request.headers.get('origin')
+    if origin and origin != str(request.base_url).rstrip('/'):
+        raise HTTPException(403,'Недопустимый источник запроса')
+    username = payload.username.strip()
+    remote_addr = _request_addr(request)
+    if await asyncio.to_thread(sessions.throttled,username,remote_addr):
+        raise HTTPException(429,'Слишком много попыток. Повторите через 5 минут',headers={'Retry-After':'300'})
+    user = await asyncio.to_thread(authenticate_admin,username,payload.password)
+    await asyncio.to_thread(users.add_login_log,username,bool(user),user['role'] if user else None,
+        remote_addr,_request_user_agent(request),'Вход в админку' if user else 'Неверный логин или пароль')
+    if not user:
+        raise HTTPException(401,'Неверный логин или пароль')
+    token, csrf = await asyncio.to_thread(sessions.create,username,session_credential(user))
+    sessions.delete(request.cookies.get(sessions.cookie_name))
+    response = JSONResponse({'user':user,'csrf_token':csrf})
+    response.set_cookie(sessions.cookie_name,token,max_age=sessions.lifetime,httponly=True,
+        secure=request.url.scheme=='https',samesite='strict',path='/')
+    return response
+
+
+@app.post('/api/admin/auth/logout')
+async def admin_logout(request: Request, admin: dict = Depends(require_admin)):
+    sessions.delete(request.cookies.get(sessions.cookie_name))
+    response = JSONResponse({'logged_out':True})
+    response.delete_cookie(sessions.cookie_name,path='/')
+    return response
 
 
 @app.get('/healthz')
@@ -311,11 +439,10 @@ async def healthz() -> dict:
 
 @app.get('/{area_slug}')
 async def monitor_area(area_slug: str) -> FileResponse:
-    reserved = {'api', 'admin', 'monitor', 'static', 'sound', 'ws', 'healthz'}
-    if area_slug in reserved:
+    if area_slug in RESERVED_AREA_SLUGS:
         raise HTTPException(status_code=404, detail='Not found')
     if not any(city.slug == area_slug or city.area_id == area_slug for city in cities.list()):
-        raise HTTPException(status_code=404, detail='Регион не найден')
+        raise HTTPException(status_code=404, detail='Локация не найдена')
     return FileResponse(PROJECT_ROOT / 'static' / 'index.html')
 
 
@@ -388,6 +515,7 @@ async def areas() -> dict:
     return {
         'items': items,
         'total': len(items),
+        'support_url': history.get_runtime_state('support_url') or '',
         'all': {
             'area_id': '',
             'display_name': 'Все',
@@ -398,25 +526,33 @@ async def areas() -> dict:
 
 
 @app.get('/api/admin/areas')
-async def admin_areas(_: str = Depends(require_admin)) -> dict:
+async def admin_areas(admin: dict = Depends(require_admin)) -> dict:
     try:
         await asyncio.wait_for(watcher.refresh_areas_from_ha(), timeout=4)
     except Exception as exc:
         logger.warning('HA area refresh failed, returning cached areas: %s', exc)
-    return {
-        'items': watcher.areas_payload(include_disabled=True),
-        'total': len(watcher.areas_payload(include_disabled=True)),
-    }
+    items = visible_areas(admin, watcher.areas_payload(include_disabled=True))
+    return {'items': items, 'total': len(items)}
 
 
 @app.post('/api/admin/areas')
-async def admin_update_area(request: CityUpdateRequest, _: str = Depends(require_admin)) -> dict:
+async def admin_update_area(request: CityUpdateRequest, admin: dict = Depends(require_admin)) -> dict:
+    require_area(admin, request.area_id)
+    before = next((city.to_dict() for city in cities.list(include_disabled=True) if city.area_id==request.area_id), {})
+    if admin['role'] == 'location':
+        existing = next((city for city in cities.list(include_disabled=True) if city.area_id == request.area_id), None)
+        if not existing:
+            raise HTTPException(404, 'Локация не найдена')
+        if (request.display_name.strip(), request.slug, request.enabled, request.color) != (existing.display_name, existing.to_dict()['slug'], existing.enabled, existing.color):
+            raise HTTPException(403, 'Изменение названия, ссылки и доступности локации требует общего администратора')
+    if request.sound_path and request.sound_path not in {item['path'] for item in list_sound_files()}:
+        raise HTTPException(400, 'Выберите существующий звук из библиотеки')
     clean_slug = slugify(request.slug or request.display_name, request.area_id)
-    if clean_slug in {'api', 'admin', 'monitor', 'static', 'sound', 'ws'}:
+    if clean_slug in RESERVED_AREA_SLUGS:
         raise HTTPException(status_code=409, detail=f'Ссылка /{clean_slug} зарезервирована')
     for city in cities.list(include_disabled=True):
         if city.area_id != request.area_id and (city.slug or slugify(city.display_name, city.area_id)) == clean_slug:
-            raise HTTPException(status_code=409, detail=f'Ссылка /{clean_slug} уже занята другим регионом')
+            raise HTTPException(status_code=409, detail=f'Ссылка /{clean_slug} уже занята другой локацией')
 
     city = cities.upsert(
         request.area_id,
@@ -432,6 +568,7 @@ async def admin_update_area(request: CityUpdateRequest, _: str = Depends(require
         request.ack_button_text,
     )
     watcher.refresh_city_settings()
+    audit_change(admin,'location','Настройки локации сохранены',city.display_name,before,city.to_dict(),[request.area_id])
 
     async def reload_entities_in_background() -> None:
         try:
@@ -447,10 +584,13 @@ async def admin_update_area(request: CityUpdateRequest, _: str = Depends(require
 async def admin_sync_area_history(
     area_id: str,
     request: HistorySyncRequest,
-    _: str = Depends(require_admin),
+    admin: dict = Depends(require_admin),
 ) -> dict:
+    require_area(admin, area_id)
     try:
-        return await watcher.sync_history_for_area(area_id, request.hours)
+        result = await watcher.sync_history_for_area(area_id, request.hours)
+        audit_change(admin,'history','История подтянута из Home Assistant',area_ids=[area_id],details=f"Добавлено нажатий: {result.get('added',0)}")
+        return result
     except Exception as exc:
         logger.warning('Manual HA history sync failed for area %s: %s', area_id, exc)
         raise HTTPException(status_code=503, detail=f'Не удалось подтянуть историю: {exc}') from exc
@@ -545,14 +685,20 @@ async def alerts_state(request: AcknowledgeRequest) -> dict:
 
 @app.get('/api/admin/employees')
 async def admin_employees(q: str = Query(default='', max_length=150), page: int = Query(default=1, ge=1),
-                          _: dict = Depends(require_admin)) -> dict:
-    return telegram.employees.page(q, page)
+                          area_id: str | None = None, admin: dict = Depends(require_admin)) -> dict:
+    if area_id:
+        require_area(admin, area_id)
+    else:
+        require_global(admin)
+    return telegram.employees.page(q, page, area_id=area_id)
 
 
 @app.post('/api/admin/employees')
 async def admin_employee_create(request: EmployeeCreateRequest, admin: dict = Depends(require_admin)) -> dict:
+    require_global(admin)
     try:
         item = telegram.employees.create(request.login, request.full_name, request.telegram_user_id, admin['username'])
+        audit_change(admin,'employees','Сотрудник добавлен',item['display_name'],after=item)
         if item['telegram_user_id']:
             telegram.seen_users.pop(item['telegram_user_id'], None)
             await broadcast_call_change(telegram.calls.refresh_profile([item['telegram_user_id']]), 'profile')
@@ -563,10 +709,22 @@ async def admin_employee_create(request: EmployeeCreateRequest, admin: dict = De
 
 @app.put('/api/admin/employees/{employee_id}')
 async def admin_employee_update(employee_id: str, request: EmployeeUpdateRequest, admin: dict = Depends(require_admin)) -> dict:
+    require_global(admin)
     try:
         previous = telegram.employees.get(employee_id)
         item = telegram.employees.update(employee_id, request.login, request.full_name, request.blocked,
             request.allowed_areas, request.telegram_user_id, admin['username'], request.profile_locked)
+        audit_change(admin,'employees','Общие ограничения сотрудника изменены',item['display_name'],
+            {'allowed_areas':previous.get('allowed_areas')},{'allowed_areas':item.get('allowed_areas')})
+        common_fields = ('login','full_name','blocked','profile_locked','telegram_user_id')
+        audit_change(admin,'employees','Профиль сотрудника изменён',item['display_name'],
+            {key:previous.get(key) for key in common_fields},{key:item.get(key) for key in common_fields},telegram.employees.areas_for(employee_id))
+        if previous['allowed_areas'] != item['allowed_areas']:
+            for area_id in telegram.employees.areas_for(employee_id):
+                before_enabled = previous['allowed_areas'] is None or area_id in previous['allowed_areas']
+                after_enabled = item['allowed_areas'] is None or area_id in item['allowed_areas']
+                audit_change(admin,'employees','Доступ сотрудника к локации изменён',item['display_name'],
+                    {'enabled':before_enabled},{'enabled':after_enabled},[area_id])
         changes = telegram.calls.refresh_profile([previous['telegram_user_id'], item['telegram_user_id']])
         for user_id in [previous['telegram_user_id'], item['telegram_user_id']]:
             if user_id:
@@ -580,53 +738,85 @@ async def admin_employee_update(employee_id: str, request: EmployeeUpdateRequest
 
 
 @app.get('/api/admin/employees/{employee_id}/audit')
-async def admin_employee_audit(employee_id: str, _: dict = Depends(require_admin)) -> dict:
+async def admin_employee_audit(employee_id: str, admin: dict = Depends(require_admin)) -> dict:
+    require_global(admin)
     return {'items': telegram.employees.audit(employee_id)}
 
 
+@app.put('/api/admin/employees/{employee_id}/areas/{area_id}')
+async def admin_employee_area(employee_id: str, area_id: str, request: EmployeeAreaRequest,
+                              admin: dict = Depends(require_admin)) -> dict:
+    require_area(admin, area_id)
+    try:
+        before = telegram.employees.area_enabled(employee_id,area_id)
+        telegram.employees.set_area_access(employee_id, area_id, request.enabled, admin['username'])
+        employee = telegram.employees.get(employee_id)
+        audit_change(admin,'employees','Доступ сотрудника к боту изменён',employee['display_name'],{'enabled':before},{'enabled':request.enabled},[area_id])
+    except KeyError:
+        raise HTTPException(404, 'Сотрудник в этой локации не найден') from None
+    return {'saved': True}
+
+
 @app.get('/api/admin/telegram')
-async def admin_telegram(_: dict = Depends(require_admin)) -> dict:
-    return telegram.public_settings()
+async def admin_telegram(admin: dict = Depends(require_admin)) -> dict:
+    payload = telegram.public_settings()
+    payload['items'] = visible_areas(admin, payload['items'])
+    return payload
 
 
 @app.post('/api/admin/telegram/{area_id}')
-async def admin_telegram_save(area_id: str, request: TelegramSettingsRequest, _: dict = Depends(require_admin)) -> dict:
+async def admin_telegram_save(area_id: str, request: TelegramSettingsRequest, admin: dict = Depends(require_admin)) -> dict:
+    require_area(admin, area_id)
+    before = telegram._setting(area_id) or {}
     try:
         await telegram.configure(area_id, request.enabled, request.token)
         telegram.store.set_policy(area_id, request.require_profile, request.allow_reassign_any)
+        after = telegram._setting(area_id) or {}
+        audit_change(admin,'telegram','Настройки Telegram сохранены',before=before,after=after,area_ids=[area_id],
+            details='Токен бота заменён' if request.token else '')
     except (ValueError, TelegramError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
     return {'saved': True}
 
 
 @app.delete('/api/admin/telegram/{area_id}')
-async def admin_telegram_delete(area_id: str, _: dict = Depends(require_admin)) -> dict:
+async def admin_telegram_delete(area_id: str, admin: dict = Depends(require_admin)) -> dict:
+    require_area(admin, area_id)
     telegram.store.delete(area_id)
+    audit_change(admin,'telegram','Настройки Telegram удалены',area_ids=[area_id])
     return {'deleted': True}
 
 
 @app.post('/api/admin/telegram/{area_id}/confirm-setup')
-async def admin_telegram_confirm(area_id: str, request: TelegramSetupRequest, _: dict = Depends(require_admin)) -> dict:
+async def admin_telegram_confirm(area_id: str, request: TelegramSetupRequest, admin: dict = Depends(require_admin)) -> dict:
+    require_area(admin, area_id)
     try:
+        before = telegram._setting(area_id) or {}
         telegram.store.confirm_setup(area_id, request.setup_id)
+        audit_change(admin,'telegram','Группа Telegram привязана',before=before,after=telegram._setting(area_id),area_ids=[area_id])
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
     return {'saved': True}
 
 
 @app.post('/api/admin/telegram/{area_id}/begin-setup')
-async def admin_telegram_begin(area_id: str, _: dict = Depends(require_admin)) -> dict:
+async def admin_telegram_begin(area_id: str, admin: dict = Depends(require_admin)) -> dict:
+    require_area(admin, area_id)
     try:
         telegram.begin_setup(area_id)
+        audit_change(admin,'telegram','Начата привязка Telegram',area_ids=[area_id])
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
     return {'started': True}
 
 
 @app.post('/api/admin/telegram/{area_id}/test')
-async def admin_telegram_test(area_id: str, _: dict = Depends(require_admin)) -> dict:
+async def admin_telegram_test(area_id: str, admin: dict = Depends(require_admin)) -> dict:
+    require_area(admin, area_id)
     try:
-        return await telegram.test(area_id)
+        result = await telegram.test(area_id)
+        audit_change(admin,'telegram','Отправлено тестовое уведомление',area_ids=[area_id])
+        return result
     except (ValueError, TelegramError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
 
@@ -638,15 +828,58 @@ async def admin_sounds(_: str = Depends(require_admin)) -> dict:
     return {'items': list_sound_files()}
 
 
+@app.get('/api/admin/settings')
+async def admin_settings(admin: dict = Depends(require_admin)):
+    require_global(admin)
+    return {'support_url':history.get_runtime_state('support_url') or ''}
+
+
+@app.put('/api/admin/settings')
+async def admin_save_settings(payload: GlobalSettingsRequest, admin: dict = Depends(require_admin)):
+    require_global(admin)
+    support_url = payload.support_url.strip()
+    try:
+        parsed = urlsplit(support_url)
+        if support_url and (parsed.scheme not in {'http','https'} or not parsed.hostname or parsed.username or parsed.password or any(ord(char)<32 for char in support_url)):
+            raise ValueError()
+        parsed.port
+    except ValueError:
+        raise HTTPException(400,'Укажите ссылку http:// или https:// без логина и пароля') from None
+    previous = history.get_runtime_state('support_url') or ''
+    history.set_runtime_state('support_url',support_url,datetime.now().isoformat(timespec='seconds'))
+    audit_change(admin,'settings','Изменена ссылка поддержки',before={'support_url':previous},after={'support_url':support_url},
+        area_ids=[city.area_id for city in cities.list(include_disabled=True)])
+    return {'support_url':support_url}
+
+
 @app.get('/api/admin/logs')
-async def admin_logs(limit: int = Query(default=120, ge=1, le=500), _: str = Depends(require_admin)) -> dict:
+async def admin_logs(limit: int = Query(default=120, ge=1, le=500), admin: dict = Depends(require_admin)) -> dict:
+    require_global(admin)
     items = recent_error_log_items(limit)
-    return {'items': items, 'total': len(items), 'limit': limit}
+    return {'items': items, 'total': len(items), 'limit': limit, 'actions': users.actions(limit)}
+
+
+@app.get('/api/admin/audit')
+async def admin_audit(page: int = Query(default=1,ge=1), area_id: str = '',
+        category: str = Query(default='',pattern='^(|location|telegram|employees|users|sounds|history|settings|legacy)$'),
+        actor: str = Query(default='',max_length=100), q: str = Query(default='',max_length=150),
+        date_from: str = '', date_to: str = '', admin: dict = Depends(require_admin)):
+    if area_id:
+        require_area(admin,area_id)
+    try:
+        for value in (date_from,date_to):
+            if value:
+                datetime.strptime(value,'%Y-%m-%d')
+        if date_from and date_to and date_from > date_to:
+            raise ValueError()
+    except ValueError:
+        raise HTTPException(400,'Проверьте период журнала') from None
+    return audit.page(admin,page,area_id=area_id,category=category,actor=actor,query=q,date_from=date_from,date_to=date_to)
 
 
 @app.get('/api/admin/me')
-async def admin_me(admin: dict = Depends(require_admin)) -> dict:
-    return {'user': admin}
+async def admin_me(request: Request, admin: dict = Depends(require_admin)) -> dict:
+    return {'user': admin, 'csrf_token':getattr(request.state,'csrf_token',None)}
 
 
 @app.post('/api/admin/me/password')
@@ -660,7 +893,9 @@ async def admin_change_own_password(
             detail='Главный env-администратор меняется только через secret.env',
         )
     try:
-        return {'item': users.set_password(admin['username'], request.password)}
+        item = users.set_password(admin['username'], request.password)
+        audit_change(admin,'users','Изменён свой пароль',admin['username'])
+        return {'item':item}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except KeyError as exc:
@@ -668,15 +903,21 @@ async def admin_change_own_password(
 
 
 @app.get('/api/admin/users')
-async def admin_users(_: dict = Depends(require_owner)) -> dict:
+async def admin_users(admin: dict = Depends(require_admin)) -> dict:
+    require_global(admin)
     items = users.list_users()
+    if admin['role'] != 'owner':
+        items = [item for item in items if item['role'] == 'location']
     return {'items': items, 'total': len(items)}
 
 
 @app.post('/api/admin/users')
-async def admin_create_user(request: UserCreateRequest, _: dict = Depends(require_owner)) -> dict:
+async def admin_create_user(request: UserCreateRequest, admin: dict = Depends(require_admin)) -> dict:
+    validate_admin_access(admin, request.role, request.allowed_areas)
     try:
-        user = users.create_user(request.username, request.password)
+        user = users.create_user(request.username, request.password, request.role, request.allowed_areas)
+        admin['audit_user'] = user['username']
+        audit_change(admin,'users','Администратор создан',user['username'],after=user,area_ids=user['allowed_areas'])
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except sqlite3.IntegrityError as exc:
@@ -688,45 +929,67 @@ async def admin_create_user(request: UserCreateRequest, _: dict = Depends(requir
 async def admin_change_user_password(
     username: str,
     request: UserPasswordRequest,
-    _: dict = Depends(require_owner),
+    admin: dict = Depends(require_admin),
 ) -> dict:
+    target = manageable_user(admin, username)
     try:
-        return {'item': users.set_password(username, request.password)}
+        item = users.set_password(username, request.password)
+        audit_change(admin,'users','Пароль администратора изменён',username,area_ids=target['allowed_areas'])
+        return {'item':item}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail='Пользователь не найден') from exc
 
 
+@app.put('/api/admin/users/{username}/access')
+async def admin_user_access(username: str, request: UserAccessRequest, admin: dict = Depends(require_admin)) -> dict:
+    previous = manageable_user(admin, username)
+    validate_admin_access(admin, request.role, request.allowed_areas)
+    item = users.set_access(username, request.role, request.allowed_areas)
+    audit_change(admin,'users','Доступ администратора изменён',username,previous,item,
+        list(dict.fromkeys((previous['allowed_areas'] or [])+(item['allowed_areas'] or []))))
+    return {'item':item}
+
+
 @app.post('/api/admin/users/{username}/active')
 async def admin_set_user_active(
     username: str,
     request: UserActiveRequest,
-    _: dict = Depends(require_owner),
+    admin: dict = Depends(require_admin),
 ) -> dict:
+    target = manageable_user(admin, username)
     try:
-        return {'item': users.set_active(username, request.is_active)}
+        item = users.set_active(username, request.is_active)
+        audit_change(admin,'users','Администратор разблокирован' if request.is_active else 'Администратор заблокирован',username,
+            {'is_active':target['is_active']},{'is_active':item['is_active']},target['allowed_areas'])
+        return {'item':item}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail='Пользователь не найден или это главный администратор') from exc
 
 
 @app.delete('/api/admin/users/{username}')
-async def admin_delete_user(username: str, _: dict = Depends(require_owner)) -> dict:
+async def admin_delete_user(username: str, admin: dict = Depends(require_admin)) -> dict:
+    target = manageable_user(admin, username)
     try:
         users.delete_user(username)
+        audit_change(admin,'users','Администратор удалён',username,area_ids=target['allowed_areas'])
     except KeyError as exc:
         raise HTTPException(status_code=404, detail='Пользователь не найден или это главный администратор') from exc
     return {'deleted': username}
 
 
 @app.get('/api/admin/login-logs')
-async def admin_login_logs(limit: int = Query(default=200, ge=1, le=500), _: dict = Depends(require_owner)) -> dict:
+async def admin_login_logs(limit: int = Query(default=200, ge=1, le=500), admin: dict = Depends(require_admin)) -> dict:
+    require_global(admin)
     items = users.login_logs(limit)
     return {'items': items, 'total': len(items), 'limit': limit}
 
 
 @app.post('/api/admin/sounds/{filename}')
-async def admin_upload_sound(filename: str, request: Request, _: str = Depends(require_admin)) -> dict:
+async def admin_upload_sound(filename: str, request: Request, area_id: str = '', admin: dict = Depends(require_admin)) -> dict:
+    if area_id:
+        require_area(admin,area_id)
     safe_filename = safe_sound_filename(filename)
     target = PROJECT_ROOT / 'sound' / safe_filename
     max_bytes = 20 * 1024 * 1024
@@ -743,12 +1006,18 @@ async def admin_upload_sound(filename: str, request: Request, _: str = Depends(r
         content.extend(chunk)
     if not content:
         raise HTTPException(status_code=400, detail='Empty sound file')
-    target.write_bytes(content)
+    try:
+        with target.open('xb') as output:
+            output.write(content)
+    except FileExistsError:
+        raise HTTPException(409, 'Звук с таким именем уже существует. Выберите другое имя') from None
+    audit_change(admin,'sounds','Звук загружен',safe_filename,area_ids=[area_id] if area_id else [])
     return {'item': {'name': safe_filename, 'path': f'sound/{safe_filename}', 'url': f'/sound/{safe_filename}', 'size': target.stat().st_size}}
 
 
 @app.delete('/api/admin/sounds/{filename}')
-async def admin_delete_sound(filename: str, _: str = Depends(require_admin)) -> dict:
+async def admin_delete_sound(filename: str, admin: dict = Depends(require_admin)) -> dict:
+    require_global(admin)
     safe_filename = safe_sound_filename(filename)
     target = PROJECT_ROOT / 'sound' / safe_filename
     try:
@@ -760,8 +1029,11 @@ async def admin_delete_sound(filename: str, _: str = Depends(require_admin)) -> 
         raise HTTPException(status_code=404, detail='Sound file not found')
 
     sound_path = f'sound/{safe_filename}'
-    cleared = cities.clear_sound_path(sound_path)
+    if any(city.sound_path == sound_path for city in cities.list(include_disabled=True)):
+        raise HTTPException(409, 'Звук используется в локации. Сначала выберите другой звук')
+    cleared = 0
     target.unlink()
+    audit_change(admin,'sounds','Звук удалён',safe_filename)
     watcher.refresh_city_settings()
 
     async def reload_entities_in_background() -> None:
@@ -785,6 +1057,7 @@ async def client_config() -> dict:
 
     return {
         'sound_url': sound_url,
+        'support_url':history.get_runtime_state('support_url') or '',
         'ack_button_text': get_live_ack_button_text(),
         'sound_play_seconds': get_live_sound_play_seconds(),
         'status_code': config.ha_trigger_to,

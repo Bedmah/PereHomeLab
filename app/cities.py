@@ -5,6 +5,9 @@ from threading import Lock
 import re
 
 
+RESERVED_AREA_SLUGS = {'api', 'admin', 'monitor', 'static', 'sound', 'ws', 'healthz', 'download-app', 'docs', 'redoc'}
+
+
 @dataclass(frozen=True)
 class CityInfo:
     area_id: str
@@ -120,13 +123,19 @@ class CityStore:
                 if not area_id:
                     continue
                 ha_name = str(area.get('name') or area_id)
+                base_slug = slugify(ha_name, area_id)
+                clean_slug = base_slug
+                suffix = 1
+                while clean_slug in RESERVED_AREA_SLUGS or connection.execute('SELECT 1 FROM city_settings WHERE slug=? AND area_id!=?', (clean_slug,area_id)).fetchone():
+                    clean_slug = f'{base_slug}-{suffix}'
+                    suffix += 1
                 connection.execute(
                     '''
                     INSERT INTO city_settings (area_id, ha_name, display_name, slug)
                     VALUES (?, ?, ?, ?)
                     ON CONFLICT(area_id) DO UPDATE SET ha_name = excluded.ha_name
                     ''',
-                    (area_id, ha_name, ha_name, slugify(ha_name, area_id)),
+                    (area_id, ha_name, ha_name, clean_slug),
                 )
 
     def list(

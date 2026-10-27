@@ -23,6 +23,10 @@ class EmployeeStore:
                     actor TEXT NOT NULL, action TEXT NOT NULL, details TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS employee_regions (
+                    employee_id TEXT NOT NULL, area_id TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
+                    PRIMARY KEY(employee_id, area_id)
+                );
             ''')
             columns = {row['name'] for row in connection.execute('PRAGMA table_info(employees)')}
             for name, definition in [('profile_complete', 'INTEGER NOT NULL DEFAULT 1'),
@@ -31,6 +35,20 @@ class EmployeeStore:
                                      ('last_seen_at', 'TEXT'), ('last_seen_area_id', 'TEXT')]:
                 if name not in columns:
                     connection.execute(f'ALTER TABLE employees ADD COLUMN {name} {definition}')
+            connection.execute('''INSERT OR IGNORE INTO employee_regions(employee_id,area_id)
+                SELECT id,last_seen_area_id FROM employees WHERE last_seen_area_id IS NOT NULL''')
+            if connection.execute("SELECT 1 FROM sqlite_master WHERE name='press_history'").fetchone():
+                connection.execute('''INSERT OR IGNORE INTO employee_regions(employee_id,area_id)
+                    SELECT DISTINCT employees.id,press_history.area_id FROM employees JOIN press_history
+                    ON employees.telegram_user_id=press_history.acknowledged_user_id
+                    WHERE press_history.acknowledged_source='telegram' AND press_history.area_id IS NOT NULL''')
+                for table, user_column in [('call_actions', 'actor_user_id'), ('call_comments', 'author_user_id')]:
+                    if connection.execute('SELECT 1 FROM sqlite_master WHERE name=?', (table,)).fetchone():
+                        connection.execute(f'''INSERT OR IGNORE INTO employee_regions(employee_id,area_id)
+                            SELECT DISTINCT employees.id,press_history.area_id FROM employees
+                            JOIN {table} ON employees.telegram_user_id={table}.{user_column}
+                            JOIN press_history ON press_history.id={table}.event_id
+                            WHERE press_history.area_id IS NOT NULL''')
 
     def connect(self):
         connection = sqlite3.connect(self.db_path, timeout=5)
@@ -90,6 +108,8 @@ class EmployeeStore:
                     (employee_id,'Telegram','discovered',json.dumps({'telegram_user_id':user_id},ensure_ascii=False),now))
             connection.execute('UPDATE employees SET telegram_name=?,telegram_username=?,last_seen_at=?,last_seen_area_id=? WHERE id=?',
                 (name,username,now,area_id,employee_id))
+            if area_id:
+                connection.execute('INSERT OR IGNORE INTO employee_regions(employee_id,area_id) VALUES(?,?)', (employee_id,area_id))
         return self.get(employee_id)
 
     def import_interactions(self, history):
@@ -219,9 +239,33 @@ class EmployeeStore:
                 (employee_id,'Telegram','self_cleared',json.dumps({'previous_login':current['login'],'previous_name':current['full_name']},ensure_ascii=False),now))
         return self.get(employee_id)
 
-    def page(self, query: str = '', page: int = 1, page_size: int = 20) -> dict:
+    def area_enabled(self, employee_id: str, area_id: str) -> bool:
         with self.connect() as connection:
-            rows = connection.execute('SELECT * FROM employees ORDER BY full_name COLLATE NOCASE').fetchall()
+            row = connection.execute('SELECT enabled FROM employee_regions WHERE employee_id=? AND area_id=?',
+                (employee_id,area_id)).fetchone()
+        return not row or bool(row['enabled'])
+
+    def areas_for(self, employee_id: str) -> list[str]:
+        with self.connect() as connection:
+            return [row['area_id'] for row in connection.execute('SELECT area_id FROM employee_regions WHERE employee_id=?',(employee_id,))]
+
+    def set_area_access(self, employee_id: str, area_id: str, enabled: bool, actor: str) -> None:
+        with self.connect() as connection:
+            cursor = connection.execute('UPDATE employee_regions SET enabled=? WHERE employee_id=? AND area_id=?',
+                (int(enabled),employee_id,area_id))
+            if not cursor.rowcount:
+                raise KeyError(employee_id)
+            connection.execute('INSERT INTO employee_audit(employee_id,actor,action,details,created_at) VALUES(?,?,?,?,?)',
+                (employee_id,actor,'area_access',json.dumps({'area_id':area_id,'enabled':enabled}),datetime.now().isoformat(timespec='seconds')))
+
+    def page(self, query: str = '', page: int = 1, page_size: int = 20, area_id: str | None = None) -> dict:
+        with self.connect() as connection:
+            if area_id:
+                rows = connection.execute('''SELECT employees.*,employee_regions.enabled AS area_enabled
+                    FROM employees JOIN employee_regions ON employees.id=employee_regions.employee_id
+                    WHERE employee_regions.area_id=? ORDER BY full_name COLLATE NOCASE''', (area_id,)).fetchall()
+            else:
+                rows = connection.execute('SELECT * FROM employees ORDER BY full_name COLLATE NOCASE').fetchall()
         items = [self.public(row) for row in rows]
         term = query.strip().casefold()
         if term.startswith('@'):

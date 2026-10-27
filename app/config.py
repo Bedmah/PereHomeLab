@@ -168,7 +168,7 @@ def load_config() -> AppConfig:
         admin_password=os.getenv('ADMIN_PASSWORD', 'admin').strip(),
         app_download_dir=_path('APP_DOWNLOAD_DIR', 'static/downloads'),
         app_download_filename=_filename('APP_DOWNLOAD_FILENAME', 'PereHomeLabKiosk.exe'),
-        app_version=os.getenv('APP_VERSION', '0.1.2').strip() or '0.1.2',
+        app_version=os.getenv('APP_VERSION', '0.1.3').strip() or '0.1.3',
         telegram_encryption_key=_optional('TELEGRAM_ENCRYPTION_KEY'),
         telegram_enabled=_bool('TELEGRAM_ENABLED', True),
         telegram_event_ttl_seconds=telegram_ttl_seconds,

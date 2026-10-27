@@ -10,6 +10,7 @@ const soundPageInfo = document.querySelector('#soundPageInfo');
 const adminLogsRefreshButton = document.querySelector('#adminLogsRefreshButton');
 const adminLogList = document.querySelector('#adminLogList');
 const adminTabs = document.querySelectorAll('.admin-tab');
+adminTabs.forEach((tab) => { tab.disabled = true; });
 const adminTabPanels = document.querySelectorAll('.admin-tab-panel');
 const ownerOnlyElements = document.querySelectorAll('.owner-only');
 const adminUsersRefreshButton = document.querySelector('#adminUsersRefreshButton');
@@ -23,10 +24,73 @@ const ownAdminPassword = document.querySelector('#ownAdminPassword');
 const changeOwnPasswordButton = document.querySelector('#changeOwnPasswordButton');
 const ownPasswordStatus = document.querySelector('#ownPasswordStatus');
 const profilePasswordNote = document.querySelector('#profilePasswordNote');
+let adminCsrfToken = '';
+const nativeAdminFetch = window.fetch.bind(window);
+window.fetch = async (input, options = {}) => {
+  const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+  const adminApi = url.origin === location.origin && url.pathname.startsWith('/api/admin/');
+  if (adminApi && !['GET','HEAD'].includes((options.method || 'GET').toUpperCase())) {
+    const headers = new Headers(options.headers);
+    if (adminCsrfToken) headers.set('X-CSRF-Token', adminCsrfToken);
+    options = {...options,headers};
+  }
+  const response = await nativeAdminFetch(input,options);
+  if (adminApi && response.status === 401) location.replace('/admin/login');
+  return response;
+};
 
 let soundItems = [];
 let soundPage = 1;
 let currentAdmin = null;
+let adminAreas = [];
+let selectedAdminArea = '';
+const adminRoleNames = {owner: 'Главный администратор', admin: 'Общий администратор', location: 'Администратор локаций'};
+const locationSelect = document.querySelector('#adminLocationSelect');
+const newAdminRole = document.querySelector('#newAdminRole');
+const newAdminAreas = document.querySelector('#newAdminAreas');
+const loadedAdminTabs = new Set(['areas']);
+
+function adminNotice(message, error = false) {
+  const status = document.querySelector('#adminFeedback');
+  status.textContent = message;
+  status.classList.toggle('error', error);
+}
+
+function describeAdminAction(item) {
+  const path = item.target;
+  if (path.includes('/me/password')) return 'Изменён свой пароль';
+  if (path.includes('/password')) return 'Изменён пароль администратора';
+  if (path.includes('/access')) return 'Изменены роль или локации администратора';
+  if (path.includes('/active')) return 'Изменён статус администратора';
+  if (path.includes('/users')) return item.action === 'DELETE' ? 'Удалён администратор' : 'Создан администратор';
+  if (path.includes('/employees')) return 'Изменён сотрудник или его доступ';
+  if (path.includes('/sync-history')) return 'Запущена синхронизация истории';
+  if (path.includes('/areas')) return 'Сохранены настройки локации';
+  if (path.includes('/telegram')) return 'Настройки или проверка Telegram';
+  if (path.includes('/sounds')) return item.action === 'DELETE' ? 'Удалён звук' : 'Загружен звук';
+  return item.action;
+}
+
+function adminCheckedAreas(container) {
+  return [...container.querySelectorAll('input:checked')].map((input) => input.value);
+}
+
+function adminAreaChecks(container, selected = []) {
+  container.replaceChildren();
+  adminAreas.forEach((area) => {
+    const label = document.createElement('label');
+    const input = document.createElement('input');
+    input.type = 'checkbox'; input.value = area.area_id; input.checked = selected.includes(area.area_id);
+    label.append(input, document.createTextNode(area.display_name)); container.append(label);
+  });
+}
+
+async function adminRequest(url, options = {}) {
+  const response = await fetch(url, {...options, cache: 'no-store'});
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(typeof payload.detail === 'string' ? payload.detail : 'Не удалось выполнить запрос');
+  return payload;
+}
 let defaultAckButtonText = 'ФА';
 let defaultSyncHistoryHours = 24;
 let defaultSoundPlaySeconds = 25;
@@ -34,27 +98,40 @@ let defaultSoundName = 'общий звук';
 const soundPageSize = 6;
 
 function setActiveTab(tabName) {
+  if (currentAdmin?.role === 'location' && ['users','settings'].includes(tabName)) return;
   adminTabs.forEach((tab) => {
     tab.classList.toggle('active', tab.dataset.tab === tabName);
   });
   adminTabPanels.forEach((panel) => {
     panel.classList.toggle('active', panel.dataset.panel === tabName);
   });
+  document.querySelector('[data-panel="employees"]')?.classList.toggle('active', tabName === 'employees');
+  if (tabName === 'logs' && loadedAdminTabs.has(tabName)) loadAdminLogs();
+  if (!loadedAdminTabs.has(tabName)) {
+    loadedAdminTabs.add(tabName);
+    const load = {settings: loadGlobalSettings, sounds: loadSounds, logs: loadAdminLogs, users: async () => { await loadAdminUsers(); await loadLoginLogs(); }}[tabName];
+    if (load) load().catch((error) => { loadedAdminTabs.delete(tabName); adminNotice(error.message, true); });
+  }
 }
 
 async function loadCurrentAdmin() {
   const response = await fetch('/api/admin/me');
   const payload = await response.json();
   currentAdmin = payload.user || null;
+  adminCsrfToken = payload.csrf_token || '';
   const isOwner = currentAdmin && currentAdmin.role === 'owner';
+  document.querySelector('#adminIdentity').textContent = `${currentAdmin.username} · ${adminRoleNames[currentAdmin.role] || ''}`;
+  document.querySelectorAll('.global-only').forEach((element) => element.classList.toggle('hidden', currentAdmin.role === 'location'));
+  newAdminRole.querySelector('[value="admin"]').hidden = !isOwner;
   ownerOnlyElements.forEach((element) => {
     element.classList.toggle('hidden', !isOwner);
   });
-  if (!isOwner && document.querySelector('.admin-tab.active')?.dataset.tab === 'users') {
+  if (currentAdmin.role === 'location' && document.querySelector('.admin-tab.active')?.dataset.tab === 'users') {
     setActiveTab('areas');
   }
   if (isOwner) {
-    profilePasswordNote.textContent = 'Главная env-учётка меняется через secret.env. Созданные пользователи могут менять пароль здесь.';
+    profilePasswordNote.textContent = 'Пароль главного администратора задаётся в secret.env.';
+    ownAdminPassword.disabled = true; changeOwnPasswordButton.disabled = true;
   }
 }
 
@@ -94,6 +171,12 @@ async function loadSounds() {
   const payload = await response.json();
   soundItems = payload.items || [];
   renderSoundLibrary();
+  document.querySelectorAll('[data-sound-select]').forEach((select) => {
+    const value = select.value;
+    const replacement = createSoundSelect(value);
+    select.replaceChildren(...replacement.childNodes);
+    select.value = value;
+  });
 }
 
 function renderSoundLibrary() {
@@ -121,15 +204,28 @@ function renderSoundLibrary() {
   pageItems.forEach((sound) => {
     const row = document.createElement('div');
     row.className = 'sound-library-item';
+    const heading = document.createElement('div');
+    heading.className = 'sound-card-heading';
+    const icon = document.createElement('span');
+    icon.className = 'sound-file-icon'; icon.setAttribute('aria-hidden', 'true');
+    icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M9 18V5l12-2v13M9 9l12-2"/><ellipse cx="6" cy="18" rx="3" ry="3"/><ellipse cx="18" cy="16" rx="3" ry="3"/></svg>';
+    const info = document.createElement('div'); info.className = 'sound-file-info';
     const name = document.createElement('div');
     name.className = 'admin-area-title';
     name.textContent = sound.name;
+    name.title = sound.name;
     const meta = document.createElement('div');
     meta.className = 'admin-area-meta';
-    meta.textContent = `${sound.path} · ${Math.ceil((sound.size || 0) / 1024)} KB`;
+    meta.textContent = `${sound.name.split('.').pop().toUpperCase()} · ${Math.ceil((sound.size || 0) / 1024)} КБ`;
+    info.append(name, meta); heading.append(icon, info);
     const audio = document.createElement('audio');
     audio.controls = true;
     audio.src = sound.url;
+    audio.preload = 'none';
+    audio.setAttribute('aria-label', `Прослушать ${sound.name}`);
+    audio.addEventListener('play', () => {
+      soundLibraryList.querySelectorAll('audio').forEach((other) => { if (other !== audio) other.pause(); });
+    });
 
     const actions = document.createElement('div');
     actions.className = 'sound-actions';
@@ -138,7 +234,7 @@ function renderSoundLibrary() {
     deleteButton.type = 'button';
     deleteButton.textContent = 'Удалить';
     deleteButton.addEventListener('click', async () => {
-      if (!confirm(`Удалить звук "${sound.name}"? Если он выбран в регионах, привязка будет снята.`)) {
+      if (!confirm(`Удалить звук "${sound.name}"?`)) {
         return;
       }
       const response = await fetch(`/api/admin/sounds/${encodeURIComponent(sound.name)}`, { method: 'DELETE' });
@@ -148,11 +244,12 @@ function renderSoundLibrary() {
         return;
       }
       await loadSounds();
-      await loadAdminAreas();
     });
+    deleteButton.hidden = currentAdmin?.role === 'location';
     actions.append(deleteButton);
 
-    row.append(name, meta, audio, actions);
+    row.append(heading, audio);
+    if (currentAdmin?.role !== 'location') row.append(actions);
     soundLibraryList.appendChild(row);
   });
 }
@@ -162,34 +259,48 @@ async function uploadSound() {
   if (!file) {
     return;
   }
-  const response = await fetch(`/api/admin/sounds/${encodeURIComponent(file.name)}`, {
+  soundUploadButton.disabled = true;
+  try {
+  const response = await fetch(`/api/admin/sounds/${encodeURIComponent(file.name)}?area_id=${encodeURIComponent(selectedAdminArea)}`, {
     method: 'POST',
     headers: { 'Content-Type': file.type || 'application/octet-stream' },
     body: file,
   });
   if (!response.ok) {
-    alert('Не удалось загрузить звук');
-    return;
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.detail || 'Не удалось загрузить звук');
   }
   soundFileInput.value = '';
   await loadSounds();
-  await loadAdminAreas();
+  adminNotice('Звук загружен. Выберите его в настройках локации.');
+  } catch (error) { adminNotice(error.message, true); }
+  finally { soundUploadButton.disabled = false; }
 }
 
 async function loadAdminAreas() {
-  const response = await fetch('/api/admin/areas');
-  const payload = await response.json();
-  renderAdminAreas(payload.items || []);
+  const payload = await adminRequest('/api/admin/areas');
+  adminAreas = payload.items || [];
+  const previousChecks = adminCheckedAreas(newAdminAreas);
+  adminAreaChecks(newAdminAreas, previousChecks);
+  if (!adminAreas.some((area) => area.area_id === selectedAdminArea)) selectedAdminArea = adminAreas[0]?.area_id || '';
+  locationSelect.replaceChildren(...adminAreas.map((area) => new Option(area.display_name, area.area_id)));
+  locationSelect.value = selectedAdminArea;
+  renderSelectedAdminArea();
+  window.dispatchEvent(new Event('admin-areas-loaded'));
+}
+
+function renderSelectedAdminArea() {
+  const area = adminAreas.find((item) => item.area_id === selectedAdminArea);
+  document.querySelector('#adminLocationTitle').textContent = area?.display_name || 'Локации не назначены';
+  renderAdminAreas(area ? [area] : []);
 }
 
 async function loadAdminLogs() {
-  const response = await fetch('/api/admin/logs?limit=160');
-  const payload = await response.json();
-  renderAdminLogs(payload.items || []);
+  return loadAdminJournal();
 }
 
 async function loadAdminUsers() {
-  if (!currentAdmin || currentAdmin.role !== 'owner') {
+  if (!currentAdmin || currentAdmin.role === 'location') {
     return;
   }
   const response = await fetch('/api/admin/users');
@@ -202,7 +313,7 @@ async function loadAdminUsers() {
 }
 
 async function loadLoginLogs() {
-  if (!currentAdmin || currentAdmin.role !== 'owner') {
+  if (!currentAdmin || currentAdmin.role === 'location') {
     return;
   }
   const response = await fetch('/api/admin/login-logs?limit=200');
@@ -232,7 +343,27 @@ function renderAdminUsers(items) {
     title.textContent = user.username;
     const meta = document.createElement('div');
     meta.className = 'admin-area-meta';
-    meta.textContent = `${user.role === 'owner' ? 'Главный админ' : 'Админ'} · ${user.is_active ? 'активен' : 'заблокирован'} · последний вход: ${user.last_login_at || 'нет'}`;
+    meta.textContent = `${adminRoleNames[user.role]} · ${user.is_active ? 'активен' : 'заблокирован'} · последний вход: ${user.last_login_at ? new Date(user.last_login_at).toLocaleString('ru-RU') : 'нет'}`;
+
+    const role = document.createElement('select'); role.setAttribute('aria-label', 'Роль');
+    role.append(new Option('Администратор локаций', 'location'));
+    if (currentAdmin.role === 'owner') role.append(new Option('Общий администратор', 'admin'));
+    if (user.role === 'owner') role.append(new Option('Главный администратор', 'owner'));
+    role.value = user.role; role.disabled = user.role === 'owner';
+    const areas = document.createElement('div'); areas.className = 'access-areas';
+    adminAreaChecks(areas, user.allowed_areas || []);
+    role.onchange = () => { areas.hidden = role.value !== 'location'; }; role.onchange();
+    const accessSave = document.createElement('button'); accessSave.className = 'mini-button';
+    accessSave.textContent = 'Сохранить доступ'; accessSave.disabled = user.role === 'owner';
+    accessSave.onclick = async () => {
+      accessSave.disabled = true;
+      try {
+        await adminRequest(`/api/admin/users/${encodeURIComponent(user.username)}/access`, {method:'PUT',
+          headers:{'Content-Type':'application/json'},body:JSON.stringify({role:role.value, allowed_areas:adminCheckedAreas(areas)})});
+        adminNotice('Доступ сохранён'); await loadAdminUsers();
+      } catch (error) { adminNotice(error.message, true); }
+      finally { accessSave.disabled = false; }
+    };
 
     const passwordInput = document.createElement('input');
     passwordInput.type = 'password';
@@ -273,8 +404,20 @@ function renderAdminUsers(items) {
       await deleteUser(user.username);
     });
 
-    actions.append(passwordButton, activeButton, deleteButton);
-    row.append(title, meta, passwordInput, actions);
+    const heading = document.createElement('div'); heading.className = 'admin-user-heading'; heading.append(title, meta);
+    if (user.role === 'owner') {
+      const note = document.createElement('p'); note.className = 'admin-note'; note.textContent = 'Главная учётная запись. Настраивается в secret.env.';
+      row.append(heading, note);
+    } else {
+      const access = document.createElement('div'); access.className = 'admin-user-access';
+      const label = document.createElement('label'); label.className = 'admin-field'; label.append('Роль', role);
+      access.append(label, accessSave, areas);
+      const passwordRow = document.createElement('div'); passwordRow.className = 'admin-password-row';
+      const passwordLabel = document.createElement('label'); passwordLabel.className = 'admin-field'; passwordLabel.append('Новый пароль', passwordInput);
+      passwordRow.append(passwordLabel, passwordButton);
+      actions.append(activeButton, deleteButton);
+      row.append(heading, access, passwordRow, actions);
+    }
     adminUserList.appendChild(row);
   });
 }
@@ -312,7 +455,7 @@ async function createAdminUser() {
   const response = await fetch('/api/admin/users', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ username, password, role: newAdminRole.value, allowed_areas: adminCheckedAreas(newAdminAreas) }),
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
@@ -322,6 +465,7 @@ async function createAdminUser() {
   newAdminUsername.value = '';
   newAdminPassword.value = '';
   await loadAdminUsers();
+  adminNotice('Администратор создан');
 }
 
 async function updateUserPassword(username, password) {
@@ -340,6 +484,7 @@ async function updateUserPassword(username, password) {
     return;
   }
   await loadAdminUsers();
+  adminNotice('Пароль изменён');
 }
 
 async function setUserActive(username, isActive) {
@@ -354,6 +499,7 @@ async function setUserActive(username, isActive) {
     return;
   }
   await loadAdminUsers();
+  adminNotice('Статус доступа изменён');
 }
 
 async function deleteUser(username) {
@@ -364,6 +510,7 @@ async function deleteUser(username) {
     return;
   }
   await loadAdminUsers();
+  adminNotice('Администратор удалён');
 }
 
 async function changeOwnPassword() {
@@ -390,6 +537,7 @@ async function changeOwnPassword() {
     ownAdminPassword.value = '';
     ownPasswordStatus.className = 'admin-save-status success';
     ownPasswordStatus.textContent = 'Пароль изменён';
+    if (adminCsrfToken) setTimeout(() => location.replace('/admin/login?changed=1'),800);
   } catch (error) {
     ownPasswordStatus.className = 'admin-save-status error';
     ownPasswordStatus.textContent = error.message || 'Не удалось сменить пароль';
@@ -426,6 +574,7 @@ function renderAdminLogs(items) {
 
 function createSoundSelect(selectedPath) {
   const select = document.createElement('select');
+  select.dataset.soundSelect = 'true';
   const defaultOption = document.createElement('option');
   defaultOption.value = '';
   defaultOption.textContent = `По умолчанию - ${defaultSoundName}`;
@@ -438,6 +587,10 @@ function createSoundSelect(selectedPath) {
     option.selected = sound.path === selectedPath;
     select.appendChild(option);
   });
+  if (selectedPath && !soundItems.some((sound) => sound.path === selectedPath)) {
+    select.append(new Option(`Файл недоступен - ${selectedPath}`, selectedPath));
+  }
+  select.value = selectedPath || '';
   return select;
 }
 
@@ -446,7 +599,7 @@ function renderAdminAreas(items) {
   if (!items.length) {
     const empty = document.createElement('div');
     empty.className = 'empty';
-    empty.textContent = 'Пространства пока не найдены. Проверь, что Home Assistant доступен и устройства добавлены в пространства.';
+    empty.textContent = currentAdmin?.role === 'location' ? 'Локации не назначены. Обратитесь к администратору.' : 'Локации пока не найдены. Проверьте пространства в Home Assistant и обновите список.';
     adminAreaList.appendChild(empty);
     return;
   }
@@ -454,6 +607,7 @@ function renderAdminAreas(items) {
   items.forEach((area) => {
     const row = document.createElement('div');
     row.className = 'admin-area';
+    row.addEventListener('input', () => { row.dataset.dirty = 'true'; });
 
     const title = document.createElement('div');
     title.className = 'admin-area-title';
@@ -580,7 +734,7 @@ function renderAdminAreas(items) {
         });
         if (!response.ok) {
           const payload = await response.json().catch(() => ({}));
-          throw new Error(payload.detail || 'Не удалось сохранить регион');
+          throw new Error(typeof payload.detail === 'string' ? payload.detail : 'Проверьте значения полей');
         }
         save.textContent = 'Сохранено';
         saveStatus.className = 'admin-save-status success';
@@ -589,7 +743,12 @@ function renderAdminAreas(items) {
           minute: '2-digit',
           second: '2-digit',
         }).format(new Date())}`;
-        setTimeout(loadAdminAreas, 900);
+        const saved = await response.json();
+        delete row.dataset.dirty;
+        const position = adminAreas.findIndex((item) => item.area_id === area.area_id);
+        if (position >= 0) adminAreas[position] = {...adminAreas[position], ...saved.item};
+        locationSelect.querySelector(`option[value="${CSS.escape(area.area_id)}"]`).textContent = saved.item.display_name;
+        document.querySelector('#adminLocationTitle').textContent = saved.item.display_name;
       } catch (error) {
         save.textContent = 'Ошибка';
         saveStatus.className = 'admin-save-status error';
@@ -625,42 +784,43 @@ function renderAdminAreas(items) {
         syncStatus.textContent = error.message || 'Ошибка синхронизации';
       } finally {
         syncButton.disabled = false;
-        await loadAdminLogs();
       }
     });
 
     actions.append(save, syncButton);
 
-    row.append(
-      title,
-      meta,
-      linkMeta,
-      input,
-      slugLabel,
-      slugInput,
-      soundLabel,
-      soundSelect,
-      repeatModeLabel,
-      repeatMode,
-      repeatHint,
-      repeatValue,
-      historyLabel,
-      historyHours,
-      ackLabel,
-      ackInput,
-      enabled,
-      actions,
-      saveStatus,
-      syncStatus,
-    );
+    function section(name, fields) {
+      const group = document.createElement('section'); group.className = 'area-settings-section';
+      const heading = document.createElement('h3'); heading.textContent = name; group.append(heading);
+      fields.forEach(([labelText, control]) => {
+        const label = document.createElement('label'); label.className = 'admin-field';
+        control.setAttribute('aria-label', labelText);
+        label.append(document.createTextNode(labelText), control); group.append(label);
+      });
+      return group;
+    }
+    const restricted = currentAdmin?.role === 'location';
+    [input, slugInput, checkbox].forEach((control) => { control.disabled = restricted; });
+    input.setAttribute('aria-label', 'Название локации');
+    row.append(meta,
+      section('Основное', [['Название локации', input], ['Короткая ссылка', slugInput], ['Кнопка подтверждения', ackInput]]),
+      section('Звук', [['Звук уведомления', soundSelect], ['Повторять', repeatMode], ['Длительность / количество', repeatValue]]),
+      section('История', [['Подтягивать историю, часов', historyHours]]));
+    repeatValue.after(repeatHint);
+    row.append(enabled, actions, saveStatus, syncStatus);
     adminAreaList.appendChild(row);
   });
 }
 
 adminRefreshButton.addEventListener('click', async () => {
+  if (adminAreaList.querySelector('[data-dirty]') && !confirm('Обновить и отменить несохранённые изменения?')) return;
+  adminRefreshButton.disabled = true;
+  try {
   await loadSounds();
   await loadAdminAreas();
-  await loadAdminLogs();
+  adminNotice('Локации обновлены');
+  } catch (error) { adminNotice(error.message, true); }
+  finally { adminRefreshButton.disabled = false; }
 });
 adminLogsRefreshButton.addEventListener('click', loadAdminLogs);
 adminUsersRefreshButton.addEventListener('click', loadAdminUsers);
@@ -688,9 +848,55 @@ soundNextButton.addEventListener('click', () => {
   renderSoundLibrary();
 });
 async function initializeAdmin() {
+  try {
   await loadCurrentAdmin();
   await loadClientConfig();
-  await Promise.all([loadSounds(), loadAdminAreas(), loadAdminLogs(), loadAdminUsers(), loadLoginLogs()]);
+  await loadSounds();
+  await loadAdminAreas();
+  adminTabs.forEach((tab) => { tab.disabled = false; });
+  window.dispatchEvent(new Event('admin-ready'));
+  } catch (error) { adminNotice(error.message || 'Не удалось загрузить админку', true); }
 }
 
+locationSelect.onchange = () => {
+  if (document.querySelector('[data-dirty]') && !confirm('Перейти в другую локацию без сохранения?')) {
+    locationSelect.value = selectedAdminArea; return;
+  }
+  selectedAdminArea = locationSelect.value;
+  renderSelectedAdminArea();
+  window.dispatchEvent(new Event('admin-area-changed'));
+};
+newAdminRole.onchange = () => { newAdminAreas.hidden = newAdminRole.value !== 'location'; };
+window.addEventListener('beforeunload', (event) => {
+  if (document.querySelector('[data-dirty]')) { event.preventDefault(); event.returnValue = ''; }
+});
+window.addEventListener('unhandledrejection', (event) => { adminNotice(event.reason?.message || 'Ошибка соединения', true); });
+document.querySelector('#adminLogoutButton').onclick = async () => {
+  if (document.querySelector('[data-dirty]') && !confirm('Выйти без сохранения изменений?')) return;
+  try {
+    await adminRequest('/api/admin/auth/logout',{method:'POST'});
+    document.querySelectorAll('[data-dirty]').forEach((node) => delete node.dataset.dirty);
+    location.replace('/admin/login');
+  } catch (error) { adminNotice(error.message,true); }
+};
+
 initializeAdmin();
+
+async function loadGlobalSettings() {
+  const payload = await adminRequest('/api/admin/settings');
+  document.querySelector('#supportUrlInput').value = payload.support_url || '';
+}
+document.querySelector('#globalSettingsForm').onsubmit = async (event) => {
+  event.preventDefault();
+  const button = event.currentTarget.querySelector('button');
+  const status = document.querySelector('#globalSettingsStatus');
+  button.disabled = true; status.textContent = 'Сохранение...'; status.classList.remove('error');
+  try {
+    const payload = await adminRequest('/api/admin/settings',{method:'PUT',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({support_url:document.querySelector('#supportUrlInput').value.trim()})});
+    document.querySelector('#supportUrlInput').value = payload.support_url;
+    updateSupportLink(payload.support_url);
+    status.textContent = 'Сохранено для всех локаций';
+  } catch (error) { status.classList.add('error'); status.textContent = error.message; }
+  finally { button.disabled = false; }
+};

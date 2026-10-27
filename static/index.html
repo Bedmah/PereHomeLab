@@ -7,7 +7,8 @@
     <link rel="icon" type="image/png" href="/static/assets/yadro-logo.png" />
     <link rel="stylesheet" href="/static/styles.css?v=0.1.2-2" />
     <link rel="stylesheet" href="/static/calls.css?v=0.1.1-8" />
-    <link rel="stylesheet" href="/static/glass.css?v=0.1.2-12" />
+    <link rel="stylesheet" href="/static/glass.css?v=0.1.3-13" />
+    <link rel="stylesheet" href="/static/navigation.css?v=0.1.3-1" />
   </head>
   <body class="monitor-page">
     <main class="screen">
@@ -35,9 +36,12 @@
             <span>Доступно</span>
             <strong id="watchedCount">0</strong>
           </div>
-          <button id="enableSoundButton" class="sound-button" type="button">Звук</button>
-          <a class="download-button" href="/download-app" download>Скачать</a>
-          <a class="download-button" href="/">Главная</a>
+          <nav class="nav-actions" aria-label="Действия монитора">
+            <a class="download-button nav-icon-button" href="/" title="Главная" aria-label="Главная"><svg aria-hidden="true"><use href="/static/icons.svg#home"/></svg></a>
+            <button id="enableSoundButton" class="sound-button nav-icon-button blocked" type="button" title="Разрешить звук уведомлений" aria-label="Разрешить звук уведомлений"><svg aria-hidden="true"><use href="/static/icons.svg#sound-off"/></svg><span class="nav-sr-only">Разрешить звук</span></button>
+            <a class="download-button nav-icon-button" href="/download-app" download title="Скачать приложение" aria-label="Скачать приложение"><svg aria-hidden="true"><use href="/static/icons.svg#download"/></svg></a>
+            <a id="supportLink" class="download-button nav-icon-button" target="_blank" rel="noopener noreferrer" title="Поддержка" aria-label="Поддержка" hidden><svg aria-hidden="true"><use href="/static/icons.svg#support"/></svg></a>
+          </nav>
         </div>
       </section>
 
@@ -84,25 +88,44 @@
       </section>
     </main>
 
+    <div id="settingsBackdrop" class="settings-backdrop hidden" aria-hidden="true"></div>
     <section id="volumeWidget" class="volume-widget">
-      <button id="volumeToggleButton" class="volume-toggle" type="button" aria-expanded="false" title="Громкость уведомлений">
-        <span>🔊</span>
-        <strong id="volumeBadge">100%</strong>
+      <button id="volumeToggleButton" class="volume-toggle" type="button" aria-expanded="false" title="Настройки уведомлений" aria-label="Настройки уведомлений">
+        <svg class="settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="m9.5 3-.6 2.2-1.4.8-2.2-.6-2.5 4.2 1.6 1.6v1.6l-1.6 1.6 2.5 4.2 2.2-.6 1.4.8.6 2.2h5l.6-2.2 1.4-.8 2.2.6 2.5-4.2-1.6-1.6v-1.6l1.6-1.6-2.5-4.2-2.2.6-1.4-.8L14.5 3z"/>
+          <circle cx="12" cy="12" r="3"/>
+        </svg>
+        <span class="settings-summary"><strong id="volumeBadge">100%</strong><small id="notificationTimerBadge" title="Автоскрытие уведомлений">выкл</small></span>
       </button>
       <div id="volumePanel" class="volume-panel hidden">
         <div class="volume-panel-head">
-          <span class="section-label">Sound</span>
-          <button id="volumeCloseButton" class="details-close small-close" type="button">×</button>
+          <h2>Настройки</h2>
+          <button id="volumeCloseButton" class="details-close small-close" type="button" aria-label="Закрыть настройки"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
         </div>
-        <h2>Громкость</h2>
-        <label class="volume-control" title="Громкость уведомлений">
-          <strong id="volumeValue">100%</strong>
-          <input id="volumeSlider" type="range" min="0" max="100" step="1" value="100" />
+        <section class="settings-sound" aria-label="Звук">
+          <div class="settings-sound-head">
+            <label for="volumeSlider">Громкость</label>
+            <label class="volume-number settings-number">
+              <input id="volumeInput" type="number" min="0" max="100" step="1" value="100" inputmode="numeric" aria-label="Громкость в процентах">
+              <span>%</span>
+            </label>
+          </div>
+          <label class="volume-control" title="Громкость уведомлений">
+            <strong id="volumeValue" class="hidden">100%</strong>
+            <input id="volumeSlider" type="range" min="0" max="100" step="1" value="100" aria-label="Громкость уведомлений">
+            <span class="volume-scale" aria-hidden="true"><span>0%</span><span>100%</span></span>
+          </label>
+          <button id="volumeTestButton" class="volume-test-button" type="button">Проверить</button>
+        </section>
+        <label class="notification-settings" for="notificationMinutes">
+          <span class="settings-copy"><strong>Автоскрытие</strong><small>0 - не скрывать</small></span>
+          <span class="settings-number"><input id="notificationMinutes" type="number" min="0" max="10080" step="1" value="0" inputmode="numeric" aria-label="Автоскрытие, минут"><span>мин</span></span>
         </label>
-        <label class="volume-number">
-          <input id="volumeInput" type="number" min="0" max="100" step="1" value="100" inputmode="numeric" />
+        <label class="notification-settings" for="highlightMinutes">
+          <span class="settings-copy"><strong>Жёлтая подсветка</strong><small>0 - до принятия</small></span>
+          <span class="settings-number"><input id="highlightMinutes" type="number" min="0" max="10080" step="1" value="5" inputmode="numeric" aria-label="Жёлтая подсветка, минут"><span>мин</span></span>
         </label>
-        <button id="volumeTestButton" class="volume-test-button" type="button">Проверить</button>
+        <p class="settings-note">Сохраняется автоматически. Таймеры действуют только на этой странице в вашем браузере и не принимают вызов.</p>
       </div>
     </section>
 
@@ -122,7 +145,7 @@
 
     <section id="detailsModal" class="details-modal hidden" role="dialog" aria-modal="true" aria-labelledby="detailsName">
       <div class="details-card call-details-card">
-        <button id="detailsCloseButton" class="details-close" type="button" aria-label="Закрыть">×</button>
+        <button id="detailsCloseButton" class="details-close" type="button" aria-label="Закрыть"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
         <span id="detailsArea" class="section-label">Переговорка</span>
         <h2 id="detailsName">Переговорка</h2>
         <dl class="details-grid">
@@ -144,48 +167,32 @@
       </div>
     </section>
 
-    <section id="batteryModal" class="details-modal hidden">
+    <section id="batteryModal" class="details-modal hidden" role="dialog" aria-modal="true" aria-labelledby="batteryDetailsName">
       <div class="details-card battery-details-card">
-        <button id="batteryCloseButton" class="details-close" type="button" aria-label="Закрыть">×</button>
-        <span class="section-label">Battery</span>
+        <button id="batteryCloseButton" class="details-close" type="button" aria-label="Закрыть"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+        <span class="section-label">Заряд кнопки</span>
         <h2 id="batteryDetailsName">Переговорка</h2>
-        <div class="battery-details-percent" id="batteryDetailsPercent">—</div>
-        <dl class="details-grid battery-details-grid">
-          <div>
-            <dt>Данные получены</dt>
-            <dd id="batteryDetailsUpdated">—</dd>
-          </div>
-          <div>
-            <dt>Значение HA обновилось</dt>
-            <dd id="batteryDetailsChanged">—</dd>
-          </div>
-          <div>
-            <dt>Статус</dt>
-            <dd id="batteryDetailsStatus">—</dd>
-          </div>
-          <div>
-            <dt>Регион</dt>
-            <dd id="batteryDetailsArea">—</dd>
-          </div>
-          <div>
-            <dt>Датчик заряда</dt>
-            <dd id="batteryDetailsEntity">—</dd>
-          </div>
-          <div>
-            <dt>Кнопка</dt>
-            <dd id="batteryDetailsButtonEntity">—</dd>
-          </div>
-          <div>
-            <dt>Сырое значение HA</dt>
-            <dd id="batteryDetailsRaw">—</dd>
-          </div>
-        </dl>
+        <p id="batteryDetailsArea" class="battery-details-area">—</p>
+        <div id="batteryChargeSummary" class="battery-charge-summary">
+          <div class="battery-details-percent" id="batteryDetailsPercent">—</div>
+          <strong id="batteryDetailsStatus">—</strong>
+          <div class="battery-charge-meter" aria-hidden="true"><span id="batteryDetailsMeter"></span></div>
+        </div>
+        <p class="battery-details-note">Последний известный заряд из Home Assistant. Кнопка передаёт его не постоянно.</p>
+        <section class="battery-data-source" aria-label="Об этих данных">
+          <h3>Об этих данных</h3>
+          <dl class="details-grid battery-details-grid">
+            <div><dt>Проверено сервисом</dt><dd id="batteryDetailsUpdated">—</dd></div>
+            <div><dt>Запись обновлена в Home Assistant</dt><dd id="batteryDetailsChanged">—</dd></div>
+          </dl>
+          <p class="battery-details-note">Первая дата - когда сервис запросил данные. Вторая - когда обновилась запись в Home Assistant. Это не время последней связи с самой кнопкой; старая дата сама по себе не означает неисправность.</p>
+        </section>
       </div>
     </section>
 
     <section id="systemStatusModal" class="details-modal system-status-modal hidden" role="dialog" aria-modal="true" aria-labelledby="systemStatusTitle">
       <div class="details-card system-status-card">
-        <button id="systemStatusCloseButton" class="details-close" type="button" aria-label="Закрыть">×</button>
+        <button id="systemStatusCloseButton" class="details-close" type="button" aria-label="Закрыть"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
         <span class="section-label">System status</span>
         <div class="system-status-heading">
           <span id="systemOverallDot" class="dot wait"></span>
@@ -208,7 +215,7 @@
     </section>
 
     <audio id="alertAudio" preload="auto"></audio>
-    <script src="/static/app.js?v=0.1.2-11"></script>
+    <script src="/static/app.js?v=0.1.3-12"></script>
     <script src="/static/history-filters.js?v=0.1.1"></script>
   </body>
 </html>

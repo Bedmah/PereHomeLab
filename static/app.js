@@ -20,6 +20,7 @@ const volumeWidget = document.querySelector("#volumeWidget");
 const volumeToggleButton = document.querySelector("#volumeToggleButton");
 const volumeCloseButton = document.querySelector("#volumeCloseButton");
 const volumePanel = document.querySelector("#volumePanel");
+const settingsBackdrop = document.querySelector('#settingsBackdrop');
 const volumeSlider = document.querySelector("#volumeSlider");
 const volumeInput = document.querySelector("#volumeInput");
 const volumeValue = document.querySelector("#volumeValue");
@@ -61,9 +62,8 @@ const batteryDetailsUpdated = document.querySelector("#batteryDetailsUpdated");
 const batteryDetailsChanged = document.querySelector("#batteryDetailsChanged");
 const batteryDetailsStatus = document.querySelector("#batteryDetailsStatus");
 const batteryDetailsArea = document.querySelector("#batteryDetailsArea");
-const batteryDetailsEntity = document.querySelector("#batteryDetailsEntity");
-const batteryDetailsButtonEntity = document.querySelector("#batteryDetailsButtonEntity");
-const batteryDetailsRaw = document.querySelector("#batteryDetailsRaw");
+const batteryChargeSummary = document.querySelector('#batteryChargeSummary');
+const batteryDetailsMeter = document.querySelector('#batteryDetailsMeter');
 
 let activeAlerts = [];
 let soundAlertId = null;
@@ -93,7 +93,6 @@ let refreshInProgress = false;
 let browserSocketConnected = false;
 let latestSystemStatus = null;
 const historyPageSize = 100;
-const freshHighlightMs = 5 * 60 * 1000;
 const defaultVolumePercent = 100;
 const volumeStorageKey = "perehomelab-alert-volume-v2";
 const audioCacheVersion = String(Date.now());
@@ -112,6 +111,68 @@ const pathAreaSlug = decodeURIComponent(window.location.pathname.replace(/^\/+|\
 if (pathAreaSlug && !["monitor", "admin"].includes(pathAreaSlug)) {
   selectedAreaSlug = pathAreaSlug;
 }
+
+const notificationMinutesInput = document.querySelector('#notificationMinutes');
+const highlightMinutesInput = document.querySelector('#highlightMinutes');
+const notificationTimerBadge = document.querySelector('#notificationTimerBadge');
+const notificationStorageKey = `perehomelab-notifications:${selectedAreaSlug || selectedAreaId || 'all'}`;
+let notificationSettings = {minutes: 0, seen: {}, hidden: {}};
+try {
+  const saved = JSON.parse(localStorage.getItem(notificationStorageKey));
+  if (saved && typeof saved.seen === 'object' && saved.seen && typeof saved.hidden === 'object' && saved.hidden) {
+    notificationSettings = saved;
+  }
+} catch {}
+function notificationMinutes(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(0, Math.min(10080, Math.round(number))) : 0;
+}
+notificationSettings.minutes = notificationMinutes(notificationSettings.minutes);
+notificationMinutesInput.value = notificationSettings.minutes;
+notificationSettings.highlightMinutes = notificationMinutes(notificationSettings.highlightMinutes ?? 5);
+highlightMinutesInput.value = notificationSettings.highlightMinutes;
+function saveNotificationSettings() {
+  try { localStorage.setItem(notificationStorageKey, JSON.stringify(notificationSettings)); } catch {}
+}
+function expireLocalAlerts() {
+  if (!notificationSettings.minutes) return;
+  const expired = activeAlerts.filter(event => Date.now() - notificationSettings.seen[event.id] >= notificationSettings.minutes * 60000);
+  if (!expired.length) return;
+  expired.forEach(event => { notificationSettings.hidden[event.id] = true; });
+  saveNotificationSettings();
+  removeAcknowledgedAlerts(expired.map(event => event.id));
+}
+function updateNotificationCountdowns() {
+  const badge = notificationSettings.minutes ? `${notificationSettings.minutes} мин.` : 'выкл';
+  if (notificationTimerBadge.textContent !== badge) notificationTimerBadge.textContent = badge;
+  popupList.querySelectorAll('.alert-countdown').forEach(node => {
+    node.hidden = !notificationSettings.minutes;
+    if (node.hidden) return;
+    const seconds = Math.max(0, Math.ceil((notificationSettings.seen[node.dataset.eventId] + notificationSettings.minutes * 60000 - Date.now()) / 1000));
+    const text = `Скроется через ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+    if (node.textContent !== text) node.textContent = text;
+  });
+}
+updateNotificationCountdowns();
+notificationMinutesInput.addEventListener('change', () => {
+  notificationSettings.minutes = notificationMinutes(notificationMinutesInput.value);
+  notificationMinutesInput.value = notificationSettings.minutes;
+  saveNotificationSettings();
+  expireLocalAlerts();
+  updateNotificationCountdowns();
+});
+function updateHistoryHighlights() {
+  historyList.querySelectorAll('.history-item').forEach(row => {
+    row.classList.toggle('fresh', !row.classList.contains('accepted') && isFresh(row.dataset.pressedAt));
+  });
+}
+highlightMinutesInput.addEventListener('change', () => {
+  notificationSettings.highlightMinutes = notificationMinutes(highlightMinutesInput.value);
+  highlightMinutesInput.value = notificationSettings.highlightMinutes;
+  saveNotificationSettings();
+  updateHistoryHighlights();
+});
+setInterval(() => { expireLocalAlerts(); updateNotificationCountdowns(); updateHistoryHighlights(); }, 1000);
 
 
 function formatHours(hours) {
@@ -447,18 +508,46 @@ function applyVolume(percent, save = true) {
   );
   alertAudio.volume = cleanPercent / 100;
   volumeSlider.value = String(cleanPercent);
+  volumeSlider.style.setProperty('--volume-fill', `${cleanPercent}%`);
   volumeInput.value = String(cleanPercent);
   volumeValue.textContent = `${cleanPercent}%`;
   volumeBadge.textContent = `${cleanPercent}%`;
+  setSoundEnabled(soundEnabled);
   if (save) {
     try { localStorage.setItem(volumeStorageKey, String(cleanPercent)); } catch {}
   }
 }
 
+let volumePanelAnimation = null;
+let settingsBackdropAnimation = null;
 function setVolumePanelOpen(open) {
-  volumePanel.classList.toggle("hidden", !open);
+  if (open === volumeWidget.classList.contains('open')) return;
+  const fromPanel = {opacity: volumePanel.classList.contains('hidden') ? 0 : getComputedStyle(volumePanel).opacity,
+    transform: volumePanel.classList.contains('hidden') ? 'translateY(8px)' : getComputedStyle(volumePanel).transform};
+  const fromBackdrop = settingsBackdrop.classList.contains('hidden') ? 0 : getComputedStyle(settingsBackdrop).opacity;
+  volumePanelAnimation?.cancel();
+  settingsBackdropAnimation?.cancel();
   volumeWidget.classList.toggle("open", open);
   volumeToggleButton.setAttribute("aria-expanded", open ? "true" : "false");
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    volumePanel.classList.toggle('hidden', !open);
+    settingsBackdrop.classList.toggle('hidden', !open);
+    return;
+  }
+  volumePanel.classList.remove('hidden');
+  settingsBackdrop.classList.remove('hidden');
+  const timing = {duration: 260, easing: 'cubic-bezier(.2,.7,.2,1)', fill: 'both'};
+  settingsBackdropAnimation = settingsBackdrop.animate([{opacity: fromBackdrop}, {opacity: open ? 1 : 0}], timing);
+  volumePanelAnimation = volumePanel.animate([
+    fromPanel,
+    {opacity: open ? 1 : 0, transform: open ? 'translateY(0)' : 'translateY(8px)'},
+  ], timing);
+  volumePanelAnimation.onfinish = () => {
+    if (!open && !volumeWidget.classList.contains('open')) {
+      volumePanel.classList.add('hidden');
+      settingsBackdrop.classList.add('hidden');
+    }
+  };
 }
 
 function applyVolumeFromInput() {
@@ -468,6 +557,9 @@ function applyVolumeFromInput() {
 async function loadClientConfig() {
   const response = await fetch("/api/client-config");
   const config = await response.json();
+  const supportLink = document.querySelector('#supportLink');
+  supportLink.hidden = !config.support_url;
+  if (config.support_url) supportLink.href = config.support_url;
   if (config.sound_url) {
     defaultSoundUrl = config.sound_url;
     alertAudio.src = defaultSoundUrl;
@@ -481,10 +573,14 @@ async function loadClientConfig() {
 
 function setSoundEnabled(enabled) {
   soundEnabled = enabled;
-  enableSoundButton.textContent = enabled ? "Звук включён" : "Включить звук";
-  enableSoundButton.classList.toggle("enabled", enabled);
-  enableSoundButton.classList.toggle('blocked', !enabled);
-  enableSoundButton.setAttribute('aria-label', enabled ? 'Звук уведомлений включён' : 'Разрешить звук уведомлений');
+  const audible = enabled && Number(volumeSlider.value) > 0;
+  const label = !enabled ? 'Разрешить звук уведомлений' : audible ? 'Звук уведомлений включён' : 'Звук выключен: громкость 0%. Настроить';
+  enableSoundButton.querySelector('use').setAttribute('href', `/static/icons.svg#sound-${audible ? 'on' : 'off'}`);
+  enableSoundButton.querySelector('.nav-sr-only').textContent = label;
+  enableSoundButton.classList.toggle("enabled", audible);
+  enableSoundButton.classList.toggle('blocked', !audible);
+  enableSoundButton.setAttribute('aria-label', label);
+  enableSoundButton.title = label;
 }
 
 function silentAudioUrl() {
@@ -516,7 +612,7 @@ function unlockSound() {
     } catch (error) {
       audioFailure = error.name === 'NotAllowedError' ? 'blocked' : 'error';
       setSoundEnabled(false);
-      enableSoundButton.textContent = audioFailure === 'blocked' ? 'Разрешить звук' : 'Проверить звук';
+      enableSoundButton.querySelector('.nav-sr-only').textContent = audioFailure === 'blocked' ? 'Разрешить звук' : 'Проверить звук';
       enableSoundButton.title = audioFailure === 'blocked' ? 'Браузер ожидает нажатия на страницу для разрешения звука' : 'Не удалось подготовить звук';
       return false;
     } finally {
@@ -914,23 +1010,6 @@ function formatBatteryUpdatedAtFull(value) {
   }).format(date);
 }
 
-function getBatteryStaleText(value) {
-  if (!value) {
-    return "";
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "";
-  }
-  const ageMs = Date.now() - date.getTime();
-  const staleMs = 48 * 60 * 60 * 1000;
-  if (ageMs < staleMs) {
-    return "";
-  }
-  const days = Math.max(1, Math.floor(ageMs / (24 * 60 * 60 * 1000)));
-  return `HA давно не обновлял: ${days} дн.`;
-}
-
 function batteryStatusText(percent) {
   if (percent <= 20) {
     return "Критично низкий заряд";
@@ -985,17 +1064,16 @@ function createBatteryRow(item) {
 }
 
 function openBatteryDetails(item) {
-  const percent = Number(item.percent);
+  const percent = item.percent === null || item.percent === '' ? NaN : Number(item.percent);
+  const valid = Number.isFinite(percent) && percent >= 0 && percent <= 100;
   batteryDetailsName.textContent = item.name || "Переговорка";
-  batteryDetailsPercent.textContent = Number.isFinite(percent) ? `${percent}%` : "—";
+  batteryDetailsPercent.textContent = valid ? `${percent}%` : "—";
   batteryDetailsUpdated.textContent = formatBatteryUpdatedAtFull(item.received_at);
   batteryDetailsChanged.textContent = formatBatteryUpdatedAtFull(item.updated_at || item.changed_at);
-  const staleText = getBatteryStaleText(item.updated_at || item.changed_at);
-  batteryDetailsStatus.textContent = staleText || (Number.isFinite(percent) ? batteryStatusText(percent) : "Нет данных");
+  batteryDetailsStatus.textContent = valid ? batteryStatusText(percent) : 'Заряд неизвестен';
+  batteryChargeSummary.dataset.level = !valid ? 'unknown' : percent <= 20 ? 'critical' : percent <= 40 ? 'low' : 'normal';
+  batteryDetailsMeter.style.width = `${valid ? percent : 0}%`;
   batteryDetailsArea.textContent = item.area_name || "Не указано";
-  batteryDetailsEntity.textContent = item.entity_id || "—";
-  batteryDetailsButtonEntity.textContent = item.button_entity_id || "—";
-  batteryDetailsRaw.textContent = item.unit ? `${item.state || "—"} ${item.unit}` : (item.state || "—");
   batteryModal.classList.remove("hidden");
 }
 
@@ -1011,29 +1089,42 @@ function applyCallChanges(events) {
   for (const event of events) {
     if ((callRevisions.get(event.id) ?? -1) >= (event.revision || 0)) continue;
     callRevisions.set(event.id, event.revision || 0);
-    if (event.sound_silenced) silenced.add(event.id);
+    const row = historyList.querySelector(`[data-event-id="${CSS.escape(event.id)}"]`);
+    if (row && event.call_state) {
+      row.classList.toggle('accepted', event.call_state === 'accepted');
+      row.classList.toggle('fresh', event.call_state !== 'accepted' && isFresh(row.dataset.pressedAt));
+    }
+    if (event.sound_silenced) {
+      silenced.add(event.id);
+      delete notificationSettings.seen[event.id];
+      delete notificationSettings.hidden[event.id];
+    }
     if (detailsEventId === event.id && !detailsModal.classList.contains('hidden')) {
       renderAssignment(event);
       openDetails(event);
     }
   }
-  if (silenced.size) removeAcknowledgedAlerts([...silenced]);
+  if (silenced.size) { saveNotificationSettings(); removeAcknowledgedAlerts([...silenced]); }
   while (callRevisions.size > 2000) callRevisions.delete(callRevisions.keys().next().value);
 }
 
 function addAlerts(events) {
   const existingIds = new Set(activeAlerts.map((event) => event.id));
   const visibleEvents = events.filter((event) => (!selectedAreaId || event.area_id === selectedAreaId)
-    && !existingIds.has(event.id) && !acknowledgedAlertIds.has(event.id));
+    && !existingIds.has(event.id) && !acknowledgedAlertIds.has(event.id) && !notificationSettings.hidden[event.id]);
   if (!visibleEvents.length) {
     return;
   }
   activeAlerts = [...activeAlerts, ...visibleEvents];
+  visibleEvents.forEach(event => { notificationSettings.seen[event.id] ??= Date.now(); });
+  saveNotificationSettings();
   visibleEvents.forEach((event) => callRevisions.set(event.id, event.revision || 0));
+  expireLocalAlerts();
+  if (!activeAlerts.length) return;
   renderPopup();
   showPopup();
   if (!soundLoopActive) {
-    playAlertSound(visibleEvents[0]);
+    playAlertSound(activeAlerts[0]);
   }
   scheduleHistoryRefresh();
 }
@@ -1046,15 +1137,24 @@ function ackTextForActiveAlerts() {
   return values.length === 1 ? values[0] : "Подтвердить всё";
 }
 
-function groupedAlertsByArea() {
+function newestPopupAlerts() {
+  const fallbackTime = Date.now();
+  return activeAlerts.map((alert, index) => {
+    const timestamp = Date.parse(alert.pressed_at || '');
+    return {alert, index, timestamp: Number.isFinite(timestamp) ? timestamp : fallbackTime};
+  }).sort((left, right) => right.timestamp - left.timestamp || right.index - left.index)
+    .map((item) => item.alert);
+}
+
+function groupedAlertsByArea(alerts) {
   const groups = [];
   const byKey = new Map();
-  activeAlerts.forEach((alert) => {
+  alerts.forEach((alert) => {
     const key = alert.area_id || alert.area_name || "unknown";
     if (!byKey.has(key)) {
       const group = {
         key,
-        areaName: alert.area_name || "Без региона",
+        areaName: alert.area_name || "Без локации",
         items: [],
       };
       byKey.set(key, group);
@@ -1074,7 +1174,8 @@ function renderPopup() {
   popupTitle.textContent = activeAlerts.length > 1 ? "Несколько нажатий" : "Нажатие";
   clearPopupButton.textContent = ackTextForActiveAlerts();
 
-  const groups = !selectedAreaId && activeAlerts.length > 1 ? groupedAlertsByArea() : [];
+  const orderedAlerts = newestPopupAlerts();
+  const groups = !selectedAreaId && activeAlerts.length > 1 ? groupedAlertsByArea(orderedAlerts) : [];
   if (groups.length > 1) {
     popup.classList.add("grouped");
     groups.forEach((group) => {
@@ -1087,11 +1188,13 @@ function renderPopup() {
       group.items.forEach((alert) => section.appendChild(createPressRow(alert)));
       popupList.appendChild(section);
     });
+    updateNotificationCountdowns();
     return;
   }
 
   popup.classList.remove("grouped");
-  activeAlerts.forEach((alert) => popupList.appendChild(createPressRow(alert)));
+  orderedAlerts.forEach((alert) => popupList.appendChild(createPressRow(alert)));
+  updateNotificationCountdowns();
 }
 
 
@@ -1150,9 +1253,10 @@ function renderHistory(items) {
   items.forEach((item) => {
     const row = document.createElement("div");
     row.className = "history-item";
-    if (isFresh(item.pressed_at)) {
-      row.classList.add("fresh");
-    }
+    row.dataset.eventId = item.id;
+    row.dataset.pressedAt = item.pressed_at || '';
+    row.classList.toggle('accepted', item.call_state === 'accepted');
+    row.classList.toggle('fresh', item.call_state !== 'accepted' && isFresh(item.pressed_at));
 
     const left = document.createElement("div");
     left.className = "history-copy";
@@ -1292,6 +1396,7 @@ function closeDetails() {
 }
 
 function isFresh(pressedAt) {
+  if (!notificationSettings.highlightMinutes) return true;
   if (!pressedAt) {
     return false;
   }
@@ -1299,7 +1404,7 @@ function isFresh(pressedAt) {
   if (Number.isNaN(timestamp)) {
     return false;
   }
-  return Date.now() - timestamp <= freshHighlightMs;
+  return Date.now() - timestamp <= notificationSettings.highlightMinutes * 60000;
 }
 
 function updatePager() {
@@ -1326,7 +1431,12 @@ function createPressRow(alert) {
   if (area) {
     left.append(area);
   }
-  left.append(name, time);
+  const countdown = document.createElement('span');
+  countdown.className = 'alert-countdown';
+  countdown.dataset.eventId = alert.id;
+  countdown.title = 'Автоскрытие только в этом браузере';
+  countdown.hidden = true;
+  left.append(name, time, countdown);
   row.append(left);
   return row;
 }
@@ -1480,6 +1590,7 @@ async function playAlertSound(event) {
 alertAudio.addEventListener("ended", startSoundLoop);
 
 enableSoundButton.addEventListener("click", async () => {
+  if (Number(volumeSlider.value) === 0) { setVolumePanelOpen(true); return; }
   await unlockSound();
   if (soundEnabled && activeAlerts.length && !soundLoopActive) playAlertSound(activeAlerts[0]);
 });
@@ -1499,7 +1610,7 @@ volumeSlider.addEventListener("input", () => {
 volumeInput.addEventListener("input", applyVolumeFromInput);
 volumeInput.addEventListener("change", applyVolumeFromInput);
 volumeToggleButton.addEventListener("click", () => {
-  setVolumePanelOpen(volumePanel.classList.contains("hidden"));
+  setVolumePanelOpen(!volumeWidget.classList.contains('open'));
 });
 volumeCloseButton.addEventListener("click", () => {
   setVolumePanelOpen(false);

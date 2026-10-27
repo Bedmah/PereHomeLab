@@ -278,11 +278,8 @@ class HomeAssistantWatcher:
 
 
     async def refresh_areas_from_ha(self) -> None:
-        registry = await self._load_registry_safe()
-        area_names = self._area_names(registry)
-        if area_names:
-            self._sync_cities(area_names)
-            await self._set_status(self._tracked_status())
+        await self._load_entities()
+        await self._set_status(self._tracked_status())
 
     async def reload_entities(self) -> None:
         await self._load_entities()
@@ -783,7 +780,8 @@ class HomeAssistantWatcher:
                 area_name=area_name,
                 available=self._is_available_state(str(state.get('state') or '')),
             )
-            self._logger.info('Discovered HA button: %s (%s, area=%s)', name, entity_id, area_name or '-')
+            if not previous_entity or (previous_entity.name, previous_entity.area_id) != (name, area_id):
+                self._logger.info('Discovered HA button: %s (%s, area=%s)', name, entity_id, area_name or '-')
 
         self._entities = entities
         self.last_entity_refresh_at = self._now_iso()

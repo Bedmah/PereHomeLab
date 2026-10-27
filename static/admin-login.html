@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Вход - PereHomeLab</title>
+  <link rel="icon" href="/static/assets/yadro-logo.png">
+  <link rel="stylesheet" href="/static/admin.css?v=0.1.3-8">
+</head>
+<body class="admin-page login-page">
+  <main class="login-card">
+    <a href="/" aria-label="На главную"><img src="/static/assets/yadro-logo.png" width="62" height="48" alt="YADRO"></a>
+    <h1>Вход в управление</h1>
+    <form id="adminLoginForm">
+      <label class="admin-field">Логин<input id="loginUsername" name="username" autocomplete="username" maxlength="100" required autofocus></label>
+      <label class="admin-field">Пароль<input id="loginPassword" type="password" name="password" autocomplete="current-password" maxlength="1024" required></label>
+      <label class="login-show"><input id="showLoginPassword" type="checkbox">Показать пароль</label>
+      <p id="loginStatus" role="status" aria-live="polite"></p>
+      <button type="submit">Войти</button>
+    </form>
+    <nav class="login-actions" aria-label="Навигация">
+      <a class="download-button admin-support" href="/" title="Главная" aria-label="Главная"><svg aria-hidden="true"><use href="/static/icons.svg#home"/></svg></a>
+      <a id="supportLink" class="download-button admin-support" target="_blank" rel="noopener noreferrer" title="Поддержка" aria-label="Поддержка" hidden><svg aria-hidden="true"><use href="/static/icons.svg#support"/></svg></a>
+    </nav>
+  </main>
+  <script src="/static/support-link.js?v=0.1.3-1"></script>
+  <script src="/static/admin-login.js?v=0.1.3-2"></script>
+</body>
+</html>

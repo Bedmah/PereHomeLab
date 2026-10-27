@@ -59,6 +59,59 @@
 }
 .monitor-page .brand-logo { filter: brightness(0) invert(1); }
 .monitor-page .volume-control { -webkit-backdrop-filter: none; backdrop-filter: none; }
+.monitor-page .settings-icon { width: 24px; height: 24px; flex: 0 0 24px; }
+.monitor-page .settings-summary { display: grid; gap: 2px; justify-items: center; line-height: 1.2; }
+.monitor-page .settings-summary small { color: #b6c5d6; font-size: 12px; font-weight: 400; }
+.monitor-page .press .area-badge { align-self: flex-start; width: fit-content; max-width: 100%; }
+.monitor-page .alert-countdown { display: block; margin-top: 5px; color: #a9b6c4; font-size: 13px; line-height: 1.4; font-weight: 400; font-variant-numeric: tabular-nums; }
+.monitor-page .alert-countdown[hidden] { display: none; }
+.monitor-page .volume-panel-head h2 { margin: 0; font-size: 23px; line-height: 1.3; }
+.monitor-page .settings-sound { margin-top: 18px; }
+.monitor-page .settings-sound-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 17px; }
+.monitor-page .settings-number { display: flex; align-items: center; gap: 6px; width: 110px; min-width: 0; margin: 0; }
+.monitor-page .settings-number input { width: 78px; min-width: 0; min-height: 44px; margin: 0; padding: 8px; border: 1px solid #ffffff24; border-radius: 10px; background: #ffffff09; color: white; font: inherit; font-size: 16px; text-align: center; }
+.monitor-page .settings-number span { color: #afbed0; font-size: 13px; }
+.monitor-page .settings-sound .volume-control { display: block; margin: 12px 0; padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; min-height: 0; }
+.monitor-page .settings-sound .volume-control input { display: block; width: 100%; margin: 0; }
+.monitor-page .settings-sound .volume-control input[type="range"] { appearance: none; height: 36px; padding: 0; border: 0; background: transparent; cursor: pointer; }
+.monitor-page .settings-sound .volume-control input[type="range"]::-webkit-slider-runnable-track { height: 6px; border: 0; border-radius: 99px; background: linear-gradient(90deg, #77b7ff var(--volume-fill, 100%), #4b6078 var(--volume-fill, 100%)); }
+.monitor-page .settings-sound .volume-control input[type="range"]::-webkit-slider-thumb { appearance: none; width: 22px; height: 22px; margin-top: -8px; border: 2px solid #77b7ff; border-radius: 50%; background: #f0f6ff; box-shadow: 0 2px 5px #0005; }
+.monitor-page .settings-sound .volume-control input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px #77b7ff40; }
+.monitor-page .settings-sound .volume-control input[type="range"]::-moz-range-track { height: 6px; border: 0; border-radius: 99px; background: linear-gradient(90deg, #77b7ff var(--volume-fill, 100%), #4b6078 var(--volume-fill, 100%)); }
+.monitor-page .settings-sound .volume-control input[type="range"]::-moz-range-thumb { width: 18px; height: 18px; border: 2px solid #77b7ff; border-radius: 50%; background: #f0f6ff; box-shadow: 0 2px 5px #0005; }
+.monitor-page .settings-sound .volume-scale { display: flex; justify-content: space-between; margin-top: 2px; }
+.monitor-page .settings-sound .volume-scale span { color: #afbed0; font-size: 12px; font-weight: 400; }
+.monitor-page .settings-sound .volume-test-button { min-height: 40px; padding: 8px 14px; font-size: 15px; border-radius: 10px; }
+.monitor-page .notification-settings { display: grid; grid-template-columns: minmax(0, 1fr) 110px; align-items: center; gap: 12px; margin-top: 16px; padding-top: 16px; border-top: 1px solid #ffffff12; font-size: 15px; }
+.monitor-page .settings-copy { display: grid; gap: 5px; min-width: 0; }
+.monitor-page .settings-copy strong { font-weight: 600; }
+.monitor-page .settings-copy small, .monitor-page .settings-note { color: #afbed0; font-size: 13px; line-height: 1.5; }
+.monitor-page .settings-note { margin: 18px 0 0; }
+.monitor-page .history-item.fresh { border-color: #d8b55b80; background: linear-gradient(135deg, #d7ad3b28, #b58a1c12), #223449; box-shadow: none; }
+.monitor-page .history-item.fresh .time { color: #e6cf8e; }
+.monitor-page .history-item.accepted { opacity: .8; }
+.monitor-page .history-item.accepted:is(:hover, :focus-visible) { opacity: 1; }
+.monitor-page #batteryModal { padding: 12px; }
+.monitor-page .battery-details-card { width: min(680px, calc(100vw - 24px)); min-height: 0; max-height: calc(100dvh - 24px); overflow-y: auto; padding: clamp(20px, 3vw, 32px); }
+.monitor-page .battery-details-card h2 { max-width: calc(100% - 44px); font-size: clamp(26px, 3vw, 42px); overflow-wrap: anywhere; }
+.monitor-page .battery-details-area { margin: 8px 0 22px; color: #c3d0df; font-size: 17px; }
+.monitor-page .battery-charge-summary { --charge-color: #9de4cd; display: grid; gap: 14px; padding: 22px; border-radius: 18px; background: #ffffff08; }
+.monitor-page .battery-charge-summary[data-level="critical"] { --charge-color: #ffadad; }
+.monitor-page .battery-charge-summary[data-level="low"] { --charge-color: #f6d28b; }
+.monitor-page .battery-charge-summary[data-level="unknown"] { --charge-color: #c3d0df; }
+.monitor-page .battery-charge-summary .battery-details-percent { margin: 0; color: var(--charge-color); font-size: clamp(58px, 8vw, 88px); font-weight: 600; line-height: 1; }
+.monitor-page #batteryDetailsStatus { font-size: 18px; font-weight: 500; color: var(--charge-color); }
+.monitor-page .battery-charge-meter { height: 7px; overflow: hidden; border-radius: 99px; background: #ffffff15; }
+.monitor-page .battery-charge-meter span { display: block; height: 100%; border-radius: inherit; background: var(--charge-color); }
+.monitor-page .battery-details-note { color: #afbed0; font-size: 15px; line-height: 1.6; margin: 16px 0; }
+.monitor-page .battery-data-source { margin-top: 20px; padding-top: 16px; border-top: 1px solid #ffffff15; }
+.monitor-page .battery-data-source h3 { margin: 0; color: #c3d0df; font-size: 16px; font-weight: 500; }
+.monitor-page .battery-details-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 18px; }
+.monitor-page .battery-details-grid dt { font-size: 14px; font-weight: 400; line-height: 1.5; text-transform: none; letter-spacing: 0; }
+.monitor-page .battery-details-grid dd { font-size: 17px; font-weight: 500; line-height: 1.5; margin: 6px 0 0; }
+.monitor-page #detailsModal { --dialog-gap: clamp(12px, 2vw, 28px); padding: var(--dialog-gap); grid-template-columns: minmax(0, 1fr); }
+.monitor-page .call-details-card { width: min(1040px, 100%); max-width: 100%; min-width: 0; max-height: calc(100dvh - 2 * var(--dialog-gap)); }
+.monitor-page .call-details-card :is(.call-assignment, .assignment-name, .assignment-platform, .details-grid > div) { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
 .monitor-page :where(.history-item, .battery-item, .press, .comment-card, .call-assignment) {
   border-color: rgba(255, 255, 255, .07); background: #223449; box-shadow: none;
 }
@@ -67,11 +120,18 @@
   background: #203145ed; box-shadow: inset 0 1px #ffffff14, 0 16px 40px #0004;
   -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
 }
-.monitor-page :is(.details-modal, .popup) { background: rgba(3, 8, 17, .76); }
+.monitor-page :is(.details-modal, .popup) { background: rgba(3, 8, 17, .76); -webkit-backdrop-filter: blur(7px); backdrop-filter: blur(7px); }
+.monitor-page :is(.details-modal, .popup):not(.hidden) { animation: backdrop-appear 260ms cubic-bezier(.2,.7,.2,1) both; }
+@keyframes backdrop-appear { from { opacity: 0; } to { opacity: 1; } }
+.monitor-page .settings-backdrop { position: fixed; inset: 0; z-index: 69; background: rgba(3, 8, 17, .6); -webkit-backdrop-filter: blur(7px); backdrop-filter: blur(7px); }
+.monitor-page .volume-panel { -webkit-backdrop-filter: none; backdrop-filter: none; }
+.monitor-page :is(.details-card, .popup-card) { -webkit-backdrop-filter: none; backdrop-filter: none; }
 .monitor-page :is(.download-button, .mini-button, .ghost-button:not(.success), .sound-button:not(.blocked), .volume-toggle):hover:not(:disabled) {
   border-color: rgba(255, 255, 255, .18); background: rgba(255, 255, 255, .14);
 }
 .monitor-page :is(.fa-button, .details-close) { border-radius: 18px; }
+.monitor-page .details-close { display: grid; place-items: center; padding: 0; flex-shrink: 0; }
+.monitor-page .details-close svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; pointer-events: none; }
 .monitor-page :is(.time, .battery-summary, .history-summary, .status-trigger-copy small) { color: #c3d0df; font-weight: 400; }
 .monitor-page :is(.history-item, .battery-item) { transition: background-color .12s ease, box-shadow .12s ease; }
 .monitor-page :is(.history-item, .battery-item):hover { box-shadow: 0 3px 10px #0002; transform: none; }
@@ -123,9 +183,29 @@
 .monitor-page .history-item .time { font-size: clamp(15px, 1.05vw, 18px); margin-top: 4px; white-space: normal; overflow-wrap: anywhere; flex-shrink: 0; }
 .monitor-page .history-assignee { font-size: clamp(14px, 1.05vw, 18px); flex-shrink: 0; margin-top: 6px; padding-top: 0; }
 @media (max-width: 1100px) {
-  .monitor-page .hero { display: flex; flex-wrap: wrap; gap: 18px; }
+  .monitor-page .hero { display: flex; flex-direction: row; flex-wrap: wrap; gap: 18px; }
   .monitor-page .hero-copy { flex: 1 1 280px; }
-  .monitor-page .hero-metrics { flex: 1 1 320px; }
+  .monitor-page .hero-metrics { flex: 1 1 320px; flex-direction: row; min-height: 0; height: auto; }
+}
+@media (max-width: 900px) {
+  .monitor-page .layout.dashboard {
+    grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto;
+    grid-template-areas: "history" "battery";
+    height: auto; min-height: 0; gap: 18px;
+  }
+  .monitor-page :is(.history-panel, .battery-panel) {
+    display: flex; width: 100%; min-height: 0; max-height: none;
+    margin: 0; align-self: stretch; transform: none;
+  }
+  .monitor-page .history-panel { grid-area: history; height: clamp(420px, 68dvh, 760px); }
+  .monitor-page .battery-panel { grid-area: battery; height: clamp(340px, 48dvh, 540px); }
+  .monitor-page :is(.history-list, .battery-list) { min-height: 0; flex: 1 1 0; overflow-y: auto; }
+  .monitor-page :is(.panel-head, .battery-summary, .battery-search, .history-filters) { flex-shrink: 0; }
+}
+@media (max-width: 700px) {
+  .monitor-page .hero { padding-block: 16px; gap: 12px; }
+  .monitor-page .hero h1 { font-size: clamp(32px, 8vw, 56px); overflow-wrap: anywhere; }
+  .monitor-page .hero-metrics { justify-content: flex-start; }
 }
 @media (max-width: 760px), (prefers-reduced-transparency: reduce) {
   .home-page :is(.region-card, .nav-status, .download-button) {
@@ -138,6 +218,10 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
+  .monitor-page :is(.details-modal, .popup):not(.hidden) { animation: none; }
   .home-page :is(.region-card, .download-button) { transition: none; }
   .monitor-page :is(.history-item, .battery-item, button, a) { transition: none; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .monitor-page :is(.details-modal, .popup, .settings-backdrop) { -webkit-backdrop-filter: none; backdrop-filter: none; }
 }

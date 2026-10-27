@@ -39,7 +39,8 @@ def main():
             page.goto(args.url.rstrip('/') + '/monitor')
             page.wait_for_function('clientConfigReady && audioProbePromise === null && historyList.children.length > 0')
             if initially_blocked:
-                assert page.locator('#enableSoundButton').inner_text() == 'Разрешить звук'
+                assert page.locator('#enableSoundButton').get_attribute('aria-label') == 'Разрешить звук уведомлений'
+                assert page.locator('#enableSoundButton use').get_attribute('href').endswith('#sound-off')
                 page.evaluate('''addAlerts([{id:'browser-blocked',device_name:'Тест',area_id:'spb'}])''')
                 assert page.evaluate('soundAlertId === null')
                 page.locator('#popupTitle').click()
@@ -95,6 +96,29 @@ def main():
             }''')
             assert all(value for key, value in checks.items() if key != 'repeatedStatusMs'), checks
             print('Queue and unchanged DOM:', checks)
+
+            ordering = page.evaluate('''() => {
+                const event = (id, area, hour) => ({id,device_name:id,area_id:area,area_name:area,
+                    pressed_at:`2026-10-26T${hour}:00:00`});
+                addAlerts([event('order-old','spb','10'),event('order-middle','spb','12')]);
+                const sameArea = [...popupList.querySelectorAll('.press .name')].map(node=>node.textContent);
+                addAlerts([event('order-other','msk','13'),event('order-new','spb','14')]);
+                const groups = [...popupList.querySelectorAll('.popup-region-group')];
+                const newestGroupFirst = groups[0].querySelector('.popup-region-title').textContent.startsWith('spb');
+                const newestInGroupFirst = groups[0].querySelector('.press .name').textContent==='order-new';
+                const soundUnchanged = soundAlertId==='order-old';
+                removeAcknowledgedAlerts(['order-old']);
+                const soundStillFifo = soundAlertId==='order-middle';
+                removeAcknowledgedAlerts(['order-middle','order-other','order-new']);
+                addAlerts([{id:'order-no-time-a',device_name:'order-no-time-a'},
+                           {id:'order-no-time-b',device_name:'order-no-time-b'}]);
+                const missingTimes = popupList.querySelector('.press .name').textContent==='order-no-time-b';
+                removeAcknowledgedAlerts(['order-no-time-a','order-no-time-b']);
+                return {sameArea: sameArea.join(',')==='order-middle,order-old',newestGroupFirst,
+                    newestInGroupFirst,soundUnchanged,soundStillFifo,missingTimes};
+            }''')
+            assert all(ordering.values()), ordering
+            print('Popup newest-first ordering and independent FIFO sound: OK')
 
             race = page.evaluate('''async () => {
                 let rejectOld;
@@ -161,10 +185,15 @@ def main():
                 device_name:index%2 ? 'Очень длинное название переговорной комнаты для проверки сетки и переноса строк' : 'Кнопка 8',
                 area_name:'Санкт-Петербург',pressed_at_display:'20.10.2026 15:00:00',call_state:index%3 ? 'accepted' : 'waiting',
                 assignee_short:index%2 ? '@telegram_username_long' : 'corporate.login.with.long.name'})))''')
-            for width, height in ((1920, 900), (1440, 900), (1280, 900), (1024, 1024), (900, 900), (768, 900), (390, 844), (1280, 600), (800, 1280)):
+            for width, height in ((1920, 900), (1440, 900), (1280, 900), (1024, 1024), (960, 1080), (900, 900), (873, 982), (768, 900), (390, 844), (320, 600), (1280, 600), (800, 1280)):
                 page.set_viewport_size({'width': width, 'height': height})
                 assert not page.evaluate('document.documentElement.scrollWidth > innerWidth + 1')
-                assert page.locator('.call-details-card').evaluate('(node) => node.getBoundingClientRect().bottom <= innerHeight')
+                assert page.locator('.call-details-card').evaluate('''node => {
+                    const rect=node.getBoundingClientRect();
+                    return rect.left>=0 && rect.right<=innerWidth+1 && rect.top>=0 && rect.bottom<=innerHeight+1
+                        && node.scrollWidth<=node.clientWidth+1;
+                }'''), f'Call details overflow at {width}x{height}'
+                assert page.locator('#detailsCloseButton').evaluate('node=>node.getBoundingClientRect().right<=innerWidth'), 'Close button outside viewport'
                 assert page.locator('#callComments').evaluate('(node) => node.scrollWidth <= node.clientWidth + 1')
                 assert page.locator('.history-item').evaluate_all('''nodes => nodes.every(node => {
                     const row=node.getBoundingClientRect();
@@ -199,6 +228,24 @@ def main():
                     && rects.every((rect,index)=>!index || rect.top>=rects[index-1].bottom-1 || Math.abs(rect.top-rects[index-1].top)<1);
             }'''), 'One assignee should expand only its own row without overlap'
             page.locator('#detailsCloseButton').click()
+            for width, height in ((1920,1080),(1200,800),(1100,900),(1067,900),(960,1080),(901,900),(900,900),(873,982),(800,800),(640,720),(480,540),(390,844),(320,600)):
+                page.set_viewport_size({'width':width,'height':height})
+                assert page.evaluate('''() => {
+                    const history=document.querySelector('.history-panel').getBoundingClientRect();
+                    const battery=document.querySelector('.battery-panel').getBoundingClientRect();
+                    const hero=document.querySelector('.hero').getBoundingClientRect();
+                    const copy=document.querySelector('.hero-copy').getBoundingClientRect();
+                    const metrics=document.querySelector('.hero-metrics').getBoundingClientRect();
+                    const separate=history.bottom<=battery.top || battery.bottom<=history.top || history.left>=battery.right || battery.left>=history.right;
+                    const headerSeparate=copy.bottom<=metrics.top+1 || metrics.bottom<=copy.top+1 || copy.left>=metrics.right-1 || metrics.left>=copy.right-1;
+                    return separate && headerSeparate && (innerWidth>1100 || hero.height<360) && Math.min(history.top,battery.top)>=hero.bottom-1
+                        && (innerWidth>900 ? battery.right<=history.left
+                            : (history.bottom<=battery.top && history.height>=battery.height))
+                        && document.documentElement.scrollWidth<=innerWidth+1;
+                }'''), f'Dashboard overlap or wrong panel priority at {width}x{height}'
+                assert page.locator('#historyList').evaluate('(node)=>node.clientHeight>=120'), 'History has no usable space'
+                if args.output:
+                    page.screenshot(path=str(Path(args.output)/f'dashboard-{width}-{height}.png'),full_page=True)
             page.set_viewport_size({'width': 1280, 'height': 720})
             page.evaluate('addAlerts([{id:"button-style",device_name:"Проверка уведомления",area_name:"Москва"}])')
             colors = page.locator('#clearPopupButton').evaluate('(node) => ({bg:getComputedStyle(node).backgroundColor,fg:getComputedStyle(node).color})')

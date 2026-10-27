@@ -2,9 +2,10 @@
   const panel = document.createElement('section');
   panel.className = 'admin-panel admin-tab-panel';
   panel.dataset.panel = 'employees';
-  panel.innerHTML = '<h2>Сотрудники</h2><p class="admin-note">Участники появляются после обращения к боту в группе или личном чате. Заполните логин и ФИО здесь или через /sync. Профили общие для всех регионов и не дают доступ в админку.</p><div class="employee-tools"><input type="search" placeholder="ФИО, логин, @username или Telegram ID" aria-label="Поиск сотрудника"><button class="mini-button" type="button">Обновить</button></div><p role="status"></p><div class="employee-list"></div><div class="telegram-actions"><button class="mini-button" type="button">←</button><span></span><button class="mini-button" type="button">→</button></div>';
-  document.querySelector('main').append(panel);
-  const search = panel.querySelector('input');
+  panel.innerHTML = '<h2>Сотрудники</h2><p class="admin-note">Участники появляются после обращения к боту. Запрет в локации не влияет на другие боты.</p><label class="telegram-toggle global-only"><input id="allEmployeeProfiles" type="checkbox">Общие профили всех локаций</label><div class="employee-tools"><input type="search" placeholder="ФИО, логин, @username или Telegram ID" aria-label="Поиск сотрудника"><button class="mini-button" type="button">Обновить</button></div><p role="status"></p><div class="employee-list"></div><div class="telegram-actions"><button class="mini-button" type="button">←</button><span></span><button class="mini-button" type="button">→</button></div>';
+  document.querySelector('#adminContent').append(panel);
+  const allProfiles = panel.querySelector('#allEmployeeProfiles');
+  const search = panel.querySelector('input[type="search"]');
   const status = panel.querySelector('[role="status"]');
   const list = panel.querySelector('.employee-list');
   const [refresh, prev, next] = panel.querySelectorAll('button');
@@ -15,6 +16,7 @@
   let regions = [];
   const createBlock = document.createElement('details');
   createBlock.className = 'employee-create';
+  createBlock.classList.add('global-only');
   createBlock.append(node('summary', 'Добавить сотрудника'));
   const createForm = document.createElement('form');
   createForm.className = 'employee-create-form';
@@ -44,6 +46,7 @@
       createForm.reset();
       createFeedback.textContent = 'Создан: ' + result.item.display_name;
       search.value = result.item.login;
+      allProfiles.checked = true;
       page = 1;
       await load();
     } catch (error) { createFeedback.classList.add('error'); createFeedback.textContent = error.message; }
@@ -82,11 +85,31 @@
       article.append(node('p', 'Telegram: ' + [item.telegram_name, item.telegram_username ? '@' + item.telegram_username : ''].filter(Boolean).join(' · '), 'telegram-meta'));
     }
     if (item.last_seen_at_display) article.append(node('p', 'Последнее обращение: ' + item.last_seen_at_display, 'telegram-meta'));
+    if (!allProfiles.checked) {
+      const accessLabel = node('label', '', 'telegram-toggle');
+      const enabled = document.createElement('input'); enabled.type = 'checkbox'; enabled.checked = Boolean(item.area_enabled);
+      enabled.dataset.autoSave = 'true';
+      enabled.disabled = Boolean(item.blocked || (item.allowed_areas !== null && !item.allowed_areas.includes(selectedAdminArea)));
+      accessLabel.append(enabled, node('span', enabled.disabled ? 'Доступ ограничен общим администратором' : 'Разрешить действия в боте этой локации'));
+      const feedback = node('p', '', 'telegram-feedback'); feedback.setAttribute('role', 'status');
+      const areaId = selectedAdminArea;
+      enabled.onchange = async () => {
+        enabled.disabled = true;
+        try {
+          await request(`/${item.id}/areas/${encodeURIComponent(areaId)}`, {method:'PUT',body:JSON.stringify({enabled:enabled.checked})});
+          feedback.textContent = 'Сохранено';
+        } catch (error) { enabled.checked = !enabled.checked; feedback.textContent = error.message; }
+        finally { enabled.disabled = false; }
+      };
+      article.append(accessLabel, feedback);
+      if (currentAdmin?.role === 'location') return article;
+      article.append(node('p','ФИО, логин и запрет изменения профиля общие для всех локаций.','admin-note'));
+    }
     const login = field(article, 'Корпоративный логин', item.login);
     const name = field(article, 'ФИО', item.full_name);
     const telegram = field(article, 'Telegram ID (очистите для отвязки)', item.telegram_user_id);
     login.placeholder = 'Корпоративный логин';
-    article.addEventListener('input', () => { article.dataset.dirty = 'true'; });
+    article.addEventListener('input', (event) => { if (!event.target.dataset.autoSave) article.dataset.dirty = 'true'; });
     const blockedLabel = node('label', '', 'telegram-toggle');
     const blocked = document.createElement('input');
     blocked.type = 'checkbox';
@@ -101,7 +124,7 @@
     const all = document.createElement('input');
     all.type = 'checkbox';
     all.checked = item.allowed_areas === null;
-    accessLabel.append(all, node('span', 'Доступ ко всем регионам'));
+    accessLabel.append(all, node('span', 'Доступ ко всем локациям'));
     const areas = node('div', '', 'employee-regions');
     const checks = regions.map((region) => {
       const label = node('label', '', 'telegram-toggle');
@@ -158,11 +181,15 @@
   }
   async function load(refreshRegions = false, silent = false) {
     const current = ++sequence;
+    if (!selectedAdminArea && !allProfiles.checked) {
+      list.replaceChildren(); status.textContent = 'Нет назначенных локаций'; return;
+    }
     if (!silent) status.textContent = 'Загрузка…';
     try {
-      const [result, regionItems] = await Promise.all([request(`?q=${encodeURIComponent(search.value)}&page=${page}`),
+      const areaQuery = allProfiles.checked ? '' : `&area_id=${encodeURIComponent(selectedAdminArea)}`;
+      const [result, regionItems] = await Promise.all([request(`?q=${encodeURIComponent(search.value)}&page=${page}${areaQuery}`),
         regions.length && !refreshRegions ? Promise.resolve(regions) : fetch('/api/admin/areas').then(async (response) => {
-          if (!response.ok) throw new Error('Не удалось загрузить регионы');
+          if (!response.ok) throw new Error('Не удалось загрузить локации');
           return (await response.json()).items;
         })]);
       if (current !== sequence) return;
@@ -176,12 +203,18 @@
     } catch (error) { if (current === sequence) status.textContent = error.message; }
   }
   refresh.onclick = () => load(true);
+  allProfiles.onchange = () => { page = 1; load(); };
   prev.onclick = () => { page--; load(); };
   next.onclick = () => { page++; load(); };
   search.oninput = () => { clearTimeout(timer); timer = setTimeout(() => { page = 1; load(); }, 300); };
   document.querySelector('[data-tab="employees"]').addEventListener('click', () => {
+    if (!currentAdmin) return;
     document.querySelectorAll('.admin-tab-panel').forEach((item) => item.classList.toggle('active', item === panel));
     load();
+  });
+  window.addEventListener('admin-area-changed', () => {
+    sequence++; page = 1; list.replaceChildren();
+    if (panel.classList.contains('active')) load();
   });
   document.querySelectorAll('.admin-tab:not([data-tab="employees"])').forEach((tab) => tab.addEventListener('click', () => panel.classList.remove('active')));
   setInterval(() => {

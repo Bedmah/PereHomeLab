@@ -1,0 +1,10 @@
+.nav-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px; min-width: 0; }
+:is(.home-page,.monitor-page) .nav-actions .nav-icon-button { --icon-button-size: clamp(48px,4vw,60px); display: inline-grid; place-items: center; flex: 0 0 var(--icon-button-size); width: var(--icon-button-size); height: var(--icon-button-size); min-width: 0; min-height: 0; padding: 0; border-radius: 16px; text-decoration: none; line-height: 1; }
+.nav-icon-button svg { width: clamp(24px,2vw,30px); height: clamp(24px,2vw,30px); pointer-events: none; }
+.nav-actions [hidden] { display: none !important; }
+.nav-icon-button:focus-visible { outline: 3px solid #a8d9ff; outline-offset: 3px; }
+.monitor-page .nav-actions .sound-button.enabled { color: #b5ead7; }
+.monitor-page .nav-actions .sound-button.blocked { color: #ffabb8; border-color: #d7708366; background: #67314055; }
+.home-page .nav-actions { justify-self: end; }
+.nav-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+@media(max-width:600px) { .nav-actions { gap: 8px; } :is(.home-page,.monitor-page) .nav-actions .nav-icon-button { --icon-button-size: 48px; } }

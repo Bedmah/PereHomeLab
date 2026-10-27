@@ -119,7 +119,7 @@ class TelegramStore:
                 if changed_bot or not enabled:
                     connection.execute("UPDATE telegram_outbox SET state = 'canceled' WHERE area_id = ? AND state = 'queued'", (area_id,))
         except sqlite3.IntegrityError:
-            raise ValueError('Этот бот уже настроен для другого региона. Используйте отдельного бота') from None
+            raise ValueError('Этот бот уже настроен для другой локации. Используйте отдельного бота') from None
 
     def delete(self, area_id: str) -> None:
         with self.connect() as connection:

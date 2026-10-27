@@ -14,10 +14,12 @@ class TelegramInteractions:
             raise ValueError('Действие доступно только сотрудникам')
         profile = self.service.employees.by_user(user['id'])
         if profile:
+            if not self.service.employees.area_enabled(profile['id'], setting['area_id']):
+                raise ValueError('Доступ к боту этой локации запрещён администратором')
             if profile['blocked']:
                 raise ValueError('Профиль заблокирован администратором')
             if profile['allowed_areas'] is not None and setting['area_id'] not in profile['allowed_areas']:
-                raise ValueError('Нет доступа к этому региону')
+                raise ValueError('Нет доступа к этой локации')
             if setting.get('require_profile') and not profile['profile_complete']:
                 raise ValueError('Сначала заполните профиль: /sync в личном чате бота')
             return profile['display_name']
@@ -109,7 +111,7 @@ class TelegramInteractions:
                         or delivery['area_id'] != setting['area_id']
                         or delivery['chat_id'] != (message.get('chat') or {}).get('id')
                         or message.get('message_thread_id') not in {None, delivery['thread_id']}):
-                    raise ValueError('Вызов не найден в этом регионе')
+                    raise ValueError('Вызов не найден в этой локации')
                 if delivery['message_id'] is None and delivery['state'] in {'sending', 'uncertain'}:
                     service.store.update_delivery(event['id'], 'sent', message_id=message['message_id'])
                     delivery = service.store.delivery(event['id'])
@@ -190,7 +192,7 @@ class TelegramInteractions:
         try:
             event = service.calls.get(flow['event_id'])
             if not event or event['area_id'] != setting['area_id']:
-                raise ValueError('Регион вызова изменён')
+                raise ValueError('Локация вызова изменена')
             name = self.identity(setting, user)
             item = service.calls.comment(flow['event_id'], str(user['id']), name, text,
                 f"{setting['bot_id']}:{chat['id']}:{message['message_id']}")

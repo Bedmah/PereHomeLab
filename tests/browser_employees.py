@@ -1,6 +1,7 @@
 """Employee admin UI checks with mocked writes; requires Playwright."""
 
 import argparse
+import base64
 import os
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -26,7 +27,8 @@ def main():
     errors = []
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True, executable_path=args.browser)
-        context = browser.new_context(http_credentials={'username':username,'password':password})
+        authorization = base64.b64encode(f'{username}:{password}'.encode()).decode()
+        context = browser.new_context(extra_http_headers={'Authorization':'Basic '+authorization})
         page = context.new_page()
         page.on('pageerror', lambda error: errors.append(str(error)))
 
@@ -93,6 +95,19 @@ def main():
         pending.get_by_label('Корпоративный логин', exact=True).fill('unsaved.login')
         page.wait_for_timeout(10500)
         assert pending.get_by_label('Корпоративный логин', exact=True).input_value() == 'unsaved.login'
+        assert page.evaluate("""() => {
+            const event = new Event('beforeunload', {cancelable:true});
+            window.dispatchEvent(event);
+            return event.defaultPrevented;
+        }""")
+        options = page.locator('#adminLocationSelect option').evaluate_all('options => options.map(option => option.value)')
+        previous_area = page.locator('#adminLocationSelect').input_value()
+        other_area = next((area for area in options if area != previous_area), None)
+        if other_area:
+            page.once('dialog',lambda dialog:dialog.dismiss())
+            page.locator('#adminLocationSelect').select_option(other_area)
+            assert page.locator('#adminLocationSelect').input_value()==previous_area
+            assert pending.get_by_label('Корпоративный логин',exact=True).input_value()=='unsaved.login'
         for width in (1440,768,390):
             page.set_viewport_size({'width':width,'height':950})
             assert not page.evaluate('document.documentElement.scrollWidth > innerWidth + 1')
